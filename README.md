@@ -1,12 +1,10 @@
 # gitcortex
 
-A fast CLI for extracting git repository metrics and generating statistics. Single binary, zero dependencies beyond git.
-
 Extracts commit metadata, file changes, blob sizes, and developer info into JSONL. Generates stats like top contributors, file hotspots, bus factor, coupling analysis, churn risk, working patterns, and developer collaboration networks.
 
 ## Performance
 
-Benchmarked on real open-source repositories (bare clones, SSD):
+Benchmarked on open-source repositories (bare clones):
 
 | Repository | Commits | Devs | Extract time | Throughput | JSONL size |
 |------------|---------|------|-------------|------------|------------|
@@ -15,19 +13,6 @@ Benchmarked on real open-source repositories (bare clones, SSD):
 | [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 1,140/s | 298K lines |
 | [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
 | [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | 13m 12s | 1,816/s | 6M lines |
-
-Throughput varies by commit complexity — repos with large diffs per commit (Praat: binary-heavy, ~1260 lines/commit average) are slower than repos with small commits (Pi-hole: ~10 lines/commit average).
-
-### Why it's fast
-
-The extraction uses only **2 git processes** for the entire run, regardless of repository size:
-
-```
-git log --raw --numstat    → single stream for all commit data
-git cat-file --batch-check → single process for all blob sizes
-```
-
-No per-commit process spawning. Memory usage stays at ~21MB for the application (git itself uses more for packfile access).
 
 ## Install
 
