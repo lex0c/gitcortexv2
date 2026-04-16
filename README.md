@@ -261,7 +261,7 @@ gitcortex report --input data.jsonl --output report.html
 gitcortex report --input data.jsonl --output report.html --top 30
 ```
 
-Includes: summary cards, activity bar chart, contributor ranking, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
+Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
 
 ### CI: quality gates for pipelines
 
