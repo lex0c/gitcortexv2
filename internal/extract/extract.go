@@ -31,9 +31,6 @@ type Config struct {
 	IncludeMessages  bool
 	CommandTimeout   time.Duration
 	FirstParent      bool
-	DiscardWarnLimit int
-	DiscardError     bool
-	Debug            bool
 	Mailmap          bool
 }
 
@@ -94,8 +91,6 @@ func LoadState(stateFile string, flagOffset int, flagSHA string) (State, error) 
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	git.DebugLogging = cfg.Debug
-
 	initialState, err := LoadState(cfg.StateFile, cfg.StartOffset, cfg.StartSHA)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)

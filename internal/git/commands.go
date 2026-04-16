@@ -5,21 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
-
-var DebugLogging bool
-
-func debugf(format string, args ...interface{}) {
-	if !DebugLogging {
-		return
-	}
-	log.Printf("debug: "+format, args...)
-}
 
 type CommitMeta struct {
 	SHA            string

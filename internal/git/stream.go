@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -24,48 +25,9 @@ type StreamCommit struct {
 type LogStreamer struct {
 	cmd    *exec.Cmd
 	stderr *bytes.Buffer
-	reader *bufReader
+	reader *bufio.Reader
 	cancel context.CancelFunc
 	done   bool
-}
-
-// bufReader wraps a raw io.Reader with a large buffer for efficient
-// chunk-based reading from the git log stream.
-type bufReader struct {
-	r   io.Reader
-	buf []byte
-	pos int
-	end int
-}
-
-func newBufReader(r io.Reader, size int) *bufReader {
-	return &bufReader{r: r, buf: make([]byte, size)}
-}
-
-func (br *bufReader) readByte() (byte, error) {
-	if br.pos >= br.end {
-		n, err := br.r.Read(br.buf)
-		if n == 0 {
-			return 0, err
-		}
-		br.pos = 0
-		br.end = n
-	}
-	b := br.buf[br.pos]
-	br.pos++
-	return b, nil
-}
-
-func (br *bufReader) peekByte() (byte, error) {
-	if br.pos >= br.end {
-		n, err := br.r.Read(br.buf)
-		if n == 0 {
-			return 0, err
-		}
-		br.pos = 0
-		br.end = n
-	}
-	return br.buf[br.pos], nil
 }
 
 func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstParent, includeMessages, useMailmap bool) (*LogStreamer, error) {
@@ -122,7 +84,7 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 	return &LogStreamer{
 		cmd:    cmd,
 		stderr: &stderr,
-		reader: newBufReader(stdout, 4<<20),
+		reader: bufio.NewReaderSize(stdout, 4<<20),
 		cancel: cancel,
 	}, nil
 }
@@ -165,7 +127,7 @@ func (ls *LogStreamer) readBlock() ([]byte, error) {
 	var block bytes.Buffer
 
 	for {
-		b, err := ls.reader.readByte()
+		b, err := ls.reader.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if block.Len() > 0 {
@@ -177,9 +139,9 @@ func (ls *LogStreamer) readBlock() ([]byte, error) {
 		}
 
 		if b == 0x00 {
-			next, peekErr := ls.reader.peekByte()
-			if peekErr == nil && next == 0x01 {
-				ls.reader.readByte() // consume 0x01
+			next, peekErr := ls.reader.Peek(1)
+			if peekErr == nil && len(next) > 0 && next[0] == 0x01 {
+				ls.reader.ReadByte() // consume 0x01
 
 				if block.Len() > 0 {
 					return block.Bytes(), nil

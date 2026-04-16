@@ -132,7 +132,7 @@ func newDataset() *Dataset {
 
 func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string) error {
 	uniqueFiles := make(map[string]struct{})
-	commitInRange := make(map[string]bool)
+	commitInRange := make(map[string]struct{}) // only stores SHAs that ARE in range
 
 	var fromTime, toTime time.Time
 	if opt.From != "" {
@@ -184,17 +184,13 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			t := parseDate(c.AuthorDate)
 
 			if hasFilter {
-				inRange := true
 				if !fromTime.IsZero() && !t.IsZero() && t.Before(fromTime) {
-					inRange = false
-				}
-				if !toTime.IsZero() && !t.IsZero() && t.After(toTime) {
-					inRange = false
-				}
-				commitInRange[c.SHA] = inRange
-				if !inRange {
 					continue
 				}
+				if !toTime.IsZero() && !t.IsZero() && t.After(toTime) {
+					continue
+				}
+				commitInRange[c.SHA] = struct{}{}
 			}
 
 			ds.CommitCount++
@@ -218,6 +214,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			}
 			cs.Commits++
 			cs.Additions += c.Additions
+			cs.Deletions += c.Deletions
 
 			// Contributor detail: active days, first/last date
 			if !t.IsZero() {
@@ -234,7 +231,6 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 					ds.contribLast[c.AuthorEmail] = t
 				}
 			}
-			cs.Deletions += c.Deletions
 
 			// Dates
 			if !t.IsZero() {
@@ -252,8 +248,10 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			if err := json.Unmarshal(line, &cp); err != nil {
 				return fmt.Errorf("line %d: parse parent: %w", lineNum, err)
 			}
-			if hasFilter && !commitInRange[cp.SHA] {
-				continue
+			if hasFilter {
+				if _, ok := commitInRange[cp.SHA]; !ok {
+					continue
+				}
 			}
 			ds.parentCounts[cp.SHA]++
 
@@ -262,8 +260,10 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			if err := json.Unmarshal(line, &cf); err != nil {
 				return fmt.Errorf("line %d: parse file: %w", lineNum, err)
 			}
-			if hasFilter && !commitInRange[cf.Commit] {
-				continue
+			if hasFilter {
+				if _, ok := commitInRange[cf.Commit]; !ok {
+					continue
+				}
 			}
 
 			path := cf.PathCurrent
