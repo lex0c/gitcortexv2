@@ -80,7 +80,7 @@ func extractCmd() *cobra.Command {
 var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
 var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
 var validStats = map[string]bool{
-	"summary": true, "contributors": true, "hotspots": true,
+	"summary": true, "contributors": true, "ranking": true, "hotspots": true,
 	"activity": true, "busfactor": true, "coupling": true,
 	"churn-risk": true, "working-patterns": true, "dev-network": true,
 }
@@ -102,7 +102,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
@@ -117,7 +117,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !validStats[sf.stat] {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network", sf.stat)
 	}
 	return nil
 }
@@ -169,6 +169,12 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	if showAll || sf.stat == "contributors" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", sf.topN)
 		if err := f.PrintContributors(stats.TopContributors(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "ranking" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Contributor Ranking ===\n", sf.topN)
+		if err := f.PrintRanking(stats.ContributorRanking(ds, sf.topN)); err != nil {
 			return err
 		}
 	}
@@ -227,6 +233,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "contributors" {
 		report["contributors"] = stats.TopContributors(ds, sf.topN)
+	}
+	if showAll || sf.stat == "ranking" {
+		report["ranking"] = stats.ContributorRanking(ds, sf.topN)
 	}
 	if showAll || sf.stat == "hotspots" {
 		report["hotspots"] = stats.FileHotspots(ds, sf.topN)

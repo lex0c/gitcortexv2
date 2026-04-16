@@ -56,6 +56,36 @@ func (f *Formatter) PrintSummary(s Summary) error {
 	}
 }
 
+func (f *Formatter) PrintRanking(ranked []RankedContributor) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(ranked)
+	case "csv":
+		rows := make([][]string, len(ranked))
+		for i, r := range ranked {
+			rows[i] = []string{
+				r.Name, r.Email,
+				fmt.Sprintf("%.1f", r.Score),
+				fmt.Sprintf("%d", r.Commits),
+				fmt.Sprintf("%d", r.LinesChanged),
+				fmt.Sprintf("%d", r.FilesTouched),
+				fmt.Sprintf("%d", r.ActiveDays),
+				r.FirstDate, r.LastDate,
+			}
+		}
+		return f.writeCSV([]string{"name", "email", "score", "commits", "lines_changed", "files_touched", "active_days", "first_date", "last_date"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "NAME\tEMAIL\tSCORE\tCOMMITS\tLINES\tFILES\tACTIVE DAYS\tFIRST\tLAST\n")
+		fmt.Fprintf(tw, "----\t-----\t-----\t-------\t-----\t-----\t-----------\t-----\t----\n")
+		for _, r := range ranked {
+			fmt.Fprintf(tw, "%s\t%s\t%.1f\t%d\t%d\t%d\t%d\t%s\t%s\n",
+				r.Name, r.Email, r.Score, r.Commits, r.LinesChanged, r.FilesTouched, r.ActiveDays, r.FirstDate, r.LastDate)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintContributors(contributors []ContributorStat) error {
 	switch f.format {
 	case "json":

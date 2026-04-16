@@ -53,6 +53,12 @@ type Dataset struct {
 	// Coupling (pre-aggregated during load)
 	couplingPairs       map[filePair]int
 	couplingFileChanges map[string]int
+
+	// Contributor detail accumulators (internal, used to finalize ContributorStat)
+	contribDays  map[string]map[string]struct{} // email → set of active dates
+	contribFiles map[string]map[string]struct{} // email → set of file paths
+	contribFirst map[string]time.Time           // email → earliest date
+	contribLast  map[string]time.Time           // email → latest date
 }
 
 type LoadOptions struct {
@@ -84,6 +90,10 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 		files:               make(map[string]*fileEntry),
 		couplingPairs:       make(map[filePair]int),
 		couplingFileChanges: make(map[string]int),
+		contribDays:         make(map[string]map[string]struct{}),
+		contribFiles:        make(map[string]map[string]struct{}),
+		contribFirst:        make(map[string]time.Time),
+		contribLast:         make(map[string]time.Time),
 	}
 
 	devSeen := make(map[string]struct{})
@@ -174,6 +184,22 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			}
 			cs.Commits++
 			cs.Additions += c.Additions
+
+			// Contributor detail: active days, first/last date
+			if !t.IsZero() {
+				dayKey := t.Format("2006-01-02")
+				if ds.contribDays[c.AuthorEmail] == nil {
+					ds.contribDays[c.AuthorEmail] = make(map[string]struct{})
+				}
+				ds.contribDays[c.AuthorEmail][dayKey] = struct{}{}
+
+				if first, ok := ds.contribFirst[c.AuthorEmail]; !ok || t.Before(first) {
+					ds.contribFirst[c.AuthorEmail] = t
+				}
+				if last, ok := ds.contribLast[c.AuthorEmail]; !ok || t.After(last) {
+					ds.contribLast[c.AuthorEmail] = t
+				}
+			}
 			cs.Deletions += c.Deletions
 
 			// Dates
@@ -230,6 +256,12 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			if cm != nil {
 				fe.devLines[cm.email] += cf.Additions + cf.Deletions
 
+				// Contributor files touched
+				if ds.contribFiles[cm.email] == nil {
+					ds.contribFiles[cm.email] = make(map[string]struct{})
+				}
+				ds.contribFiles[cm.email][path] = struct{}{}
+
 				if !cm.date.IsZero() {
 					days := now.Sub(cm.date).Hours() / 24
 					weight := math.Exp(-lambda * days)
@@ -274,6 +306,23 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			ds.MergeCount++
 		}
 	}
+
+	// Finalize contributor details
+	for email, cs := range ds.contributors {
+		cs.ActiveDays = len(ds.contribDays[email])
+		cs.FilesTouched = len(ds.contribFiles[email])
+		if t, ok := ds.contribFirst[email]; ok {
+			cs.FirstDate = t.Format("2006-01-02")
+		}
+		if t, ok := ds.contribLast[email]; ok {
+			cs.LastDate = t.Format("2006-01-02")
+		}
+	}
+	// Free accumulator maps
+	ds.contribDays = nil
+	ds.contribFiles = nil
+	ds.contribFirst = nil
+	ds.contribLast = nil
 
 	return ds, nil
 }

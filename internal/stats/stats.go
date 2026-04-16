@@ -7,11 +7,15 @@ import (
 )
 
 type ContributorStat struct {
-	Name      string
-	Email     string
-	Commits   int
-	Additions int64
-	Deletions int64
+	Name       string
+	Email      string
+	Commits    int
+	Additions  int64
+	Deletions  int64
+	FilesTouched int
+	ActiveDays int
+	FirstDate  string
+	LastDate   string
 }
 
 type FileStat struct {
@@ -117,6 +121,94 @@ func TopContributors(ds *Dataset, n int) []ContributorStat {
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Commits > result[j].Commits
+	})
+
+	if n > 0 && n < len(result) {
+		result = result[:n]
+	}
+	return result
+}
+
+type RankedContributor struct {
+	Name         string
+	Email        string
+	Score        float64
+	Commits      int
+	LinesChanged int64
+	FilesTouched int
+	ActiveDays   int
+	FirstDate    string
+	LastDate     string
+}
+
+// ContributorRanking scores developers using a composite metric that normalizes
+// commits, lines changed, files touched, and active days to percentiles within
+// the dataset, then averages them. This avoids bias toward any single dimension.
+func ContributorRanking(ds *Dataset, n int) []RankedContributor {
+	type raw struct {
+		cs    *ContributorStat
+		lines int64
+	}
+
+	devs := make([]raw, 0, len(ds.contributors))
+	for _, cs := range ds.contributors {
+		devs = append(devs, raw{cs: cs, lines: cs.Additions + cs.Deletions})
+	}
+
+	if len(devs) == 0 {
+		return nil
+	}
+
+	// Find max for each dimension (for normalization)
+	var maxCommits int
+	var maxLines int64
+	var maxFiles, maxDays int
+	for _, d := range devs {
+		if d.cs.Commits > maxCommits {
+			maxCommits = d.cs.Commits
+		}
+		if d.lines > maxLines {
+			maxLines = d.lines
+		}
+		if d.cs.FilesTouched > maxFiles {
+			maxFiles = d.cs.FilesTouched
+		}
+		if d.cs.ActiveDays > maxDays {
+			maxDays = d.cs.ActiveDays
+		}
+	}
+
+	norm := func(val, max float64) float64 {
+		if max == 0 {
+			return 0
+		}
+		return val / max
+	}
+
+	result := make([]RankedContributor, len(devs))
+	for i, d := range devs {
+		nCommits := norm(float64(d.cs.Commits), float64(maxCommits))
+		nLines := norm(float64(d.lines), float64(maxLines))
+		nFiles := norm(float64(d.cs.FilesTouched), float64(maxFiles))
+		nDays := norm(float64(d.cs.ActiveDays), float64(maxDays))
+
+		score := (nCommits + nLines + nFiles + nDays) / 4.0 * 100
+
+		result[i] = RankedContributor{
+			Name:         d.cs.Name,
+			Email:        d.cs.Email,
+			Score:        math.Round(score*10) / 10,
+			Commits:      d.cs.Commits,
+			LinesChanged: d.lines,
+			FilesTouched: d.cs.FilesTouched,
+			ActiveDays:   d.cs.ActiveDays,
+			FirstDate:    d.cs.FirstDate,
+			LastDate:     d.cs.LastDate,
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Score > result[j].Score
 	})
 
 	if n > 0 && n < len(result) {
