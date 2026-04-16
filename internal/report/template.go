@@ -54,20 +54,20 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Activity}}
 <h2>Activity</h2>
-<p class="hint">Commit volume over time. Spikes may indicate releases or sprints. Sustained drops may signal attrition.</p>
-<table>
-<tr><th>Period</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
-{{$maxCommits := 0}}{{range .Activity}}{{if gt .Commits $maxCommits}}{{$maxCommits = .Commits}}{{end}}{{end}}
+<p class="hint">Commit volume over time. Spikes may indicate releases or sprints. Sustained drops may signal attrition. Green = additions, red = deletions.</p>
+{{$max := .MaxActivityLines}}
+<div style="display:flex; flex-direction:column; gap:4px;">
 {{range .Activity}}
-<tr>
-  <td class="mono">{{.Period}}</td>
-  <td>{{.Commits}}</td>
-  <td style="width:40%"><div class="bar-container"><div class="bar bar-commits" style="width: {{pctInt .Commits $maxCommits}}%"></div></div></td>
-  <td>{{.Additions}}</td>
-  <td>{{.Deletions}}</td>
-</tr>
+<div style="display:flex; align-items:center; gap:8px;">
+  <span class="mono" style="min-width:60px; text-align:right; color:#656d76;">{{.Period}}</span>
+  <div style="flex:1; display:flex; height:20px;">
+    <div class="bar bar-add" style="width: {{pct .Additions $max}}%" title="{{.Additions}} additions"></div>
+    <div class="bar bar-del" style="width: {{pct .Deletions $max}}%" title="{{.Deletions}} deletions"></div>
+  </div>
+  <span class="bar-value" style="min-width:70px;">{{.Commits}} commits</span>
+</div>
 {{end}}
-</table>
+</div>
 {{end}}
 
 {{if .Contributors}}

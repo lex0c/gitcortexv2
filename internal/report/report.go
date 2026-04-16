@@ -21,8 +21,9 @@ type ReportData struct {
 	TopCommits   []stats.BigCommit
 	DevNetwork   []stats.DevEdge
 	Profiles     []stats.DevProfile
-	PatternGrid  [7][24]int
-	MaxPattern   int
+	PatternGrid    [7][24]int
+	MaxPattern     int
+	MaxActivityLines int64
 }
 
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
@@ -41,12 +42,21 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		}
 	}
 
+	activity := stats.ActivityOverTime(ds, "month")
+	var maxActLines int64
+	for _, a := range activity {
+		total := a.Additions + a.Deletions
+		if total > maxActLines {
+			maxActLines = total
+		}
+	}
+
 	data := ReportData{
 		RepoName:     repoName,
 		Summary:      stats.ComputeSummary(ds),
 		Contributors: stats.TopContributors(ds, topN),
 		Hotspots:     stats.FileHotspots(ds, topN),
-		Activity:     stats.ActivityOverTime(ds, "month"),
+		Activity:     activity,
 		BusFactor:    stats.BusFactor(ds, topN),
 		Coupling:     stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
 		ChurnRisk:    stats.ChurnRisk(ds, topN),
@@ -54,8 +64,9 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		TopCommits:   stats.TopCommits(ds, topN),
 		DevNetwork:   stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
 		Profiles:     stats.DevProfiles(ds, ""),
-		PatternGrid:  grid,
-		MaxPattern:   maxP,
+		PatternGrid:      grid,
+		MaxPattern:       maxP,
+		MaxActivityLines: maxActLines,
 	}
 
 	return tmpl.Execute(w, data)
@@ -108,6 +119,10 @@ func toInt64(v float64) int64 {
 	return int64(v)
 }
 
+func plus(a, b int64) int64 {
+	return a + b
+}
+
 var funcMap = template.FuncMap{
 	"pct":       pct,
 	"pctInt":    pctInt,
@@ -117,6 +132,7 @@ var funcMap = template.FuncMap{
 	"seq":       seq,
 	"list":      list,
 	"int64":     toInt64,
+	"plus":      plus,
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(reportHTML))
