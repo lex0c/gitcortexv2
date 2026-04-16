@@ -66,6 +66,9 @@ gitcortex extract --repo /path/to/repo --output data.jsonl
 
 # Normalize author identities via .mailmap
 gitcortex extract --repo /path/to/repo --mailmap
+
+# Exclude files from extraction
+gitcortex extract --repo /path/to/repo --ignore package-lock.json --ignore "*.min.js"
 ```
 
 The default branch is auto-detected from `origin/HEAD`, falling back to `main`, `master`, or `HEAD`.

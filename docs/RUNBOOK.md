@@ -46,6 +46,17 @@ Without `--mailmap`, the same person with different emails appears as separate c
 
 Requires a `.mailmap` file in the repo root or `~/.mailmap`. See `man gitmailmap` for format details.
 
+### Exclude files
+
+Filter out generated files, lock files, or vendored code:
+
+```bash
+./gitcortex extract --repo /path/to/repo --ignore package-lock.json --ignore yarn.lock
+./gitcortex extract --repo /path/to/repo --ignore "*.min.js" --ignore "*.generated.go"
+```
+
+Matches against the filename (`package-lock.json`) and the full path. Uses glob patterns (not regex). Commit additions/deletions are recalculated without the ignored files.
+
 ### Include commit messages
 
 Messages are excluded by default to save space. Enable with:
