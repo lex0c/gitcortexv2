@@ -68,10 +68,16 @@ func (br *bufReader) peekByte() (byte, error) {
 	return br.buf[br.pos], nil
 }
 
-func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstParent, includeMessages bool) (*LogStreamer, error) {
-	format := "%x00%x01%H%x1f%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%B%x1e%x02"
+func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstParent, includeMessages, useMailmap bool) (*LogStreamer, error) {
+	// %aN/%aE/%cN/%cE use .mailmap normalization; %an/%ae/%cn/%ce don't
+	an, ae, cn, ce := "%an", "%ae", "%cn", "%ce"
+	if useMailmap {
+		an, ae, cn, ce = "%aN", "%aE", "%cN", "%cE"
+	}
+
+	format := fmt.Sprintf("%%x00%%x01%%H%%x1f%%T%%x1f%%P%%x1f%s%%x1f%s%%x1f%%aI%%x1f%s%%x1f%s%%x1f%%cI%%x1f%%B%%x1e%%x02", an, ae, cn, ce)
 	if !includeMessages {
-		format = "%x00%x01%H%x1f%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%x1e%x02"
+		format = fmt.Sprintf("%%x00%%x01%%H%%x1f%%T%%x1f%%P%%x1f%s%%x1f%s%%x1f%%aI%%x1f%s%%x1f%s%%x1f%%cI%%x1f%%x1e%%x02", an, ae, cn, ce)
 	}
 
 	args := []string{"-C", repo, "log",
@@ -79,7 +85,6 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 		"--abbrev=40",
 		fmt.Sprintf("--format=%s", format),
 	}
-
 	if firstParent {
 		args = append(args, "--first-parent")
 	}

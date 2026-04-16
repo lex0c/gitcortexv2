@@ -34,6 +34,7 @@ type Config struct {
 	DiscardWarnLimit int
 	DiscardError     bool
 	Debug            bool
+	Mailmap          bool
 }
 
 type State struct {
@@ -142,7 +143,7 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 		resumeSHA = sha
 	}
 
-	streamer, err := git.NewLogStreamer(ctx, cfg.Repo, cfg.Branch, resumeSHA, cfg.FirstParent, cfg.IncludeMessages)
+	streamer, err := git.NewLogStreamer(ctx, cfg.Repo, cfg.Branch, resumeSHA, cfg.FirstParent, cfg.IncludeMessages, cfg.Mailmap)
 	if err != nil {
 		return fmt.Errorf("start log stream: %w", err)
 	}
