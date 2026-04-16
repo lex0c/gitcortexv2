@@ -112,7 +112,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	out, err := os.Create(cfg.Output)
+	resuming := initialState.LastProcessedSHA != "" || initialState.CommitOffset > 0
+	var out *os.File
+	if resuming {
+		out, err = os.OpenFile(cfg.Output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	} else {
+		out, err = os.Create(cfg.Output)
+	}
 	if err != nil {
 		return fmt.Errorf("open output: %w", err)
 	}

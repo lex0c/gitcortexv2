@@ -69,51 +69,80 @@ func extractCmd() *cobra.Command {
 	return cmd
 }
 
+var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
+var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
+var validStats = map[string]bool{
+	"summary": true, "contributors": true, "hotspots": true,
+	"activity": true, "busfactor": true,
+}
+
 func statsCmd() *cobra.Command {
 	var (
 		input       string
 		format      string
 		topN        int
 		granularity string
+		stat        string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Generate statistics from extracted JSONL data",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !validFormats[format] {
+				return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", format)
+			}
+			if !validGranularities[granularity] {
+				return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", granularity)
+			}
+			if stat != "" && !validStats[stat] {
+				return fmt.Errorf("invalid --stat %q; must be one of: summary, contributors, hotspots, activity, busfactor", stat)
+			}
+
 			ds, err := stats.LoadJSONL(input)
 			if err != nil {
 				return err
 			}
 
-			f := stats.NewFormatter(os.Stdout, format)
-
 			fmt.Fprintf(os.Stderr, "Loaded %d commits, %d files, %d devs\n\n",
 				len(ds.Commits), len(ds.Files), len(ds.Devs))
 
-			fmt.Fprintln(os.Stderr, "=== Summary ===")
-			if err := f.PrintSummary(stats.ComputeSummary(ds)); err != nil {
-				return err
+			showAll := stat == ""
+			f := stats.NewFormatter(os.Stdout, format)
+
+			if format == "json" {
+				return printStatsJSON(f, ds, topN, granularity, stat)
 			}
 
-			fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", topN)
-			if err := f.PrintContributors(stats.TopContributors(ds, topN)); err != nil {
-				return err
+			if showAll || stat == "summary" {
+				fmt.Fprintln(os.Stderr, "=== Summary ===")
+				if err := f.PrintSummary(stats.ComputeSummary(ds)); err != nil {
+					return err
+				}
 			}
-
-			fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", topN)
-			if err := f.PrintHotspots(stats.FileHotspots(ds, topN)); err != nil {
-				return err
+			if showAll || stat == "contributors" {
+				fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", topN)
+				if err := f.PrintContributors(stats.TopContributors(ds, topN)); err != nil {
+					return err
+				}
 			}
-
-			fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", granularity)
-			if err := f.PrintActivity(stats.ActivityOverTime(ds, granularity)); err != nil {
-				return err
+			if showAll || stat == "hotspots" {
+				fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", topN)
+				if err := f.PrintHotspots(stats.FileHotspots(ds, topN)); err != nil {
+					return err
+				}
 			}
-
-			fmt.Fprintf(os.Stderr, "\n=== Top %d Bus Factor Risk ===\n", topN)
-			if err := f.PrintBusFactor(stats.BusFactor(ds, topN)); err != nil {
-				return err
+			if showAll || stat == "activity" {
+				fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", granularity)
+				if err := f.PrintActivity(stats.ActivityOverTime(ds, granularity)); err != nil {
+					return err
+				}
+			}
+			if showAll || stat == "busfactor" {
+				fmt.Fprintf(os.Stderr, "\n=== Top %d Bus Factor Risk ===\n", topN)
+				if err := f.PrintBusFactor(stats.BusFactor(ds, topN)); err != nil {
+					return err
+				}
 			}
 
 			return nil
@@ -124,6 +153,30 @@ func statsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries to show")
 	cmd.Flags().StringVar(&granularity, "granularity", "month", "Activity granularity: day, week, month, year")
+	cmd.Flags().StringVar(&stat, "stat", "", "Show only a specific stat: summary, contributors, hotspots, activity, busfactor")
 
 	return cmd
+}
+
+func printStatsJSON(f *stats.Formatter, ds *stats.Dataset, topN int, granularity, stat string) error {
+	showAll := stat == ""
+	report := make(map[string]interface{})
+
+	if showAll || stat == "summary" {
+		report["summary"] = stats.ComputeSummary(ds)
+	}
+	if showAll || stat == "contributors" {
+		report["contributors"] = stats.TopContributors(ds, topN)
+	}
+	if showAll || stat == "hotspots" {
+		report["hotspots"] = stats.FileHotspots(ds, topN)
+	}
+	if showAll || stat == "activity" {
+		report["activity"] = stats.ActivityOverTime(ds, granularity)
+	}
+	if showAll || stat == "busfactor" {
+		report["busfactor"] = stats.BusFactor(ds, topN)
+	}
+
+	return f.PrintReport(report)
 }

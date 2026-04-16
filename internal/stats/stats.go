@@ -3,6 +3,7 @@ package stats
 import (
 	"fmt"
 	"sort"
+	"time"
 )
 
 type ContributorStat struct {
@@ -85,20 +86,16 @@ func ComputeSummary(ds *Dataset) Summary {
 	}
 
 	if len(ds.Commits) > 0 {
-		s.FirstCommitDate = ds.Commits[0].AuthorDate
-		s.LastCommitDate = ds.Commits[len(ds.Commits)-1].AuthorDate
-
-		earliest := parseDate(ds.Commits[0].AuthorDate)
-		latest := earliest
-		for _, c := range ds.Commits[1:] {
+		var earliest, latest time.Time
+		for _, c := range ds.Commits {
 			t := parseDate(c.AuthorDate)
 			if t.IsZero() {
 				continue
 			}
-			if t.Before(earliest) {
+			if earliest.IsZero() || t.Before(earliest) {
 				earliest = t
 			}
-			if t.After(latest) {
+			if latest.IsZero() || t.After(latest) {
 				latest = t
 			}
 		}
@@ -325,31 +322,3 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 	return result
 }
 
-func fileStatusBreakdown(ds *Dataset) map[string]int {
-	counts := make(map[string]int)
-	for _, f := range ds.Files {
-		status := normalizeStatus(f.Status)
-		counts[status]++
-	}
-	return counts
-}
-
-func normalizeStatus(s string) string {
-	if len(s) == 0 {
-		return "unknown"
-	}
-	switch s[0] {
-	case 'A':
-		return "added"
-	case 'M':
-		return "modified"
-	case 'D':
-		return "deleted"
-	case 'R':
-		return "renamed"
-	case 'C':
-		return "copied"
-	default:
-		return s
-	}
-}

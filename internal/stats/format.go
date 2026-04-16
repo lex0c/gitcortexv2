@@ -159,6 +159,10 @@ func (f *Formatter) PrintBusFactor(results []BusFactorResult) error {
 	}
 }
 
+func (f *Formatter) PrintReport(v interface{}) error {
+	return f.writeJSON(v)
+}
+
 func (f *Formatter) writeJSON(v interface{}) error {
 	enc := json.NewEncoder(f.w)
 	enc.SetIndent("", "  ")

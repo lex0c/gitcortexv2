@@ -306,7 +306,9 @@ func ReadCommitMetadata(ctx context.Context, repo, sha string, commandTimeout ti
 		return CommitMeta{}, fmt.Errorf("show output: %w", err)
 	}
 
-	parts := strings.Split(strings.TrimSuffix(string(out), "\x1e"), "\x1f")
+	raw := strings.TrimRight(string(out), "\n\r")
+	raw = strings.TrimSuffix(raw, "\x1e")
+	parts := strings.Split(raw, "\x1f")
 	if len(parts) < 10 {
 		return CommitMeta{}, fmt.Errorf("unexpected commit format for %s", sha)
 	}
@@ -315,6 +317,8 @@ func ReadCommitMetadata(ctx context.Context, repo, sha string, commandTimeout ti
 	if parts[2] != "" {
 		parents = strings.Fields(parts[2])
 	}
+
+	message := strings.TrimRight(parts[9], "\n\r")
 
 	return CommitMeta{
 		SHA:            parts[0],
@@ -326,7 +330,7 @@ func ReadCommitMetadata(ctx context.Context, repo, sha string, commandTimeout ti
 		CommitterName:  parts[6],
 		CommitterEmail: parts[7],
 		CommitterDate:  parts[8],
-		Message:        parts[9],
+		Message:        message,
 	}, nil
 }
 
