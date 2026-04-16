@@ -29,17 +29,6 @@ git cat-file --batch-check → single process for all blob sizes
 
 No per-commit process spawning. Memory usage stays at ~21MB for the application (git itself uses more for packfile access).
 
-### Stats memory
-
-Stats use streaming aggregation — the JSONL file is read once, line by line, without storing raw records. Only compact aggregation maps are kept in memory.
-
-| Repository | JSONL size | Stats RAM (estimated) |
-|------------|-----------|----------------------|
-| Pi-hole (7K commits) | 0.7 MB | ~5 MB |
-| WordPress (52K commits) | 85 MB | ~30 MB |
-| Kubernetes (137K commits) | 270 MB | ~80 MB |
-| Linux kernel (1.4M commits) | 1.9 GB | ~360 MB |
-
 ## Install
 
 ```bash
