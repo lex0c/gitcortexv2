@@ -86,9 +86,7 @@ type DevEdge struct {
 }
 
 type StatsFlags struct {
-	CouplingMaxFiles   int
 	CouplingMinChanges int
-	ChurnHalfLife      int
 	NetworkMinFiles    int
 }
 
@@ -254,7 +252,7 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 	return result
 }
 
-func FileCoupling(ds *Dataset, n, _, minCoChanges int) []CouplingResult {
+func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 	var results []CouplingResult
 
 	for p, count := range ds.couplingPairs {
@@ -297,7 +295,7 @@ func FileCoupling(ds *Dataset, n, _, minCoChanges int) []CouplingResult {
 	return results
 }
 
-func ChurnRisk(ds *Dataset, n, _ int) []ChurnRiskResult {
+func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 	var results []ChurnRiskResult
 
 	for path, fe := range ds.files {

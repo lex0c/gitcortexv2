@@ -9,6 +9,13 @@ import (
 	"text/tabwriter"
 )
 
+func JoinDevs(devs []string) string {
+	if len(devs) <= 3 {
+		return strings.Join(devs, ", ")
+	}
+	return strings.Join(devs[:3], ", ") + fmt.Sprintf(" +%d", len(devs)-3)
+}
+
 type Formatter struct {
 	w      io.Writer
 	format string

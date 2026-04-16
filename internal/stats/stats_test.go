@@ -183,7 +183,7 @@ func TestBusFactorSingleDev(t *testing.T) {
 
 func TestFileCoupling(t *testing.T) {
 	ds := makeDataset()
-	result := FileCoupling(ds, 10, 0, 1)
+	result := FileCoupling(ds, 10, 1)
 
 	if len(result) != 1 {
 		t.Fatalf("len = %d", len(result))
@@ -199,7 +199,7 @@ func TestFileCoupling(t *testing.T) {
 
 func TestFileCouplingMinThreshold(t *testing.T) {
 	ds := makeDataset()
-	result := FileCoupling(ds, 10, 0, 20) // min 20 co-changes
+	result := FileCoupling(ds, 10, 20) // min 20 co-changes
 	if len(result) != 0 {
 		t.Errorf("expected empty with high threshold, got %d", len(result))
 	}
@@ -207,7 +207,7 @@ func TestFileCouplingMinThreshold(t *testing.T) {
 
 func TestChurnRisk(t *testing.T) {
 	ds := makeDataset()
-	result := ChurnRisk(ds, 10, 90)
+	result := ChurnRisk(ds, 10)
 
 	if len(result) != 3 {
 		t.Fatalf("len = %d", len(result))

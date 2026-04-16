@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"strings"
 
 	"gitcortex/internal/stats"
 )
@@ -47,8 +46,8 @@ func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) err
 		Hotspots:     stats.FileHotspots(ds, topN),
 		Activity:     stats.ActivityOverTime(ds, "month"),
 		BusFactor:    stats.BusFactor(ds, topN),
-		Coupling:     stats.FileCoupling(ds, topN, sf.CouplingMaxFiles, sf.CouplingMinChanges),
-		ChurnRisk:    stats.ChurnRisk(ds, topN, sf.ChurnHalfLife),
+		Coupling:     stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
+		ChurnRisk:    stats.ChurnRisk(ds, topN),
 		Patterns:     patterns,
 		TopCommits:   stats.TopCommits(ds, topN),
 		DevNetwork:   stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
@@ -90,12 +89,6 @@ func shortPath(path string, maxLen int) string {
 	return "..." + path[len(path)-maxLen+3:]
 }
 
-func joinDevs(devs []string) string {
-	if len(devs) <= 3 {
-		return strings.Join(devs, ", ")
-	}
-	return strings.Join(devs[:3], ", ") + fmt.Sprintf(" +%d", len(devs)-3)
-}
 
 func seq(start, end int) []int {
 	s := make([]int, end-start+1)
@@ -118,7 +111,7 @@ var funcMap = template.FuncMap{
 	"pctInt":    pctInt,
 	"heatColor": heatColor,
 	"shortPath": shortPath,
-	"joinDevs":  joinDevs,
+	"joinDevs":  stats.JoinDevs,
 	"seq":       seq,
 	"list":      list,
 	"int64":     toInt64,

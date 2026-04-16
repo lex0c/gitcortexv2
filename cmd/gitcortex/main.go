@@ -197,13 +197,13 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	}
 	if showAll || sf.stat == "coupling" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d File Coupling ===\n", sf.topN)
-		if err := f.PrintCoupling(stats.FileCoupling(ds, sf.topN, sf.couplingMaxFiles, sf.couplingMinChanges)); err != nil {
+		if err := f.PrintCoupling(stats.FileCoupling(ds, sf.topN, sf.couplingMinChanges)); err != nil {
 			return err
 		}
 	}
 	if showAll || sf.stat == "churn-risk" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Churn Risk ===\n", sf.topN)
-		if err := f.PrintChurnRisk(stats.ChurnRisk(ds, sf.topN, sf.churnHalfLife)); err != nil {
+		if err := f.PrintChurnRisk(stats.ChurnRisk(ds, sf.topN)); err != nil {
 			return err
 		}
 	}
@@ -259,10 +259,10 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 		report["busfactor"] = stats.BusFactor(ds, sf.topN)
 	}
 	if showAll || sf.stat == "coupling" {
-		report["coupling"] = stats.FileCoupling(ds, sf.topN, sf.couplingMaxFiles, sf.couplingMinChanges)
+		report["coupling"] = stats.FileCoupling(ds, sf.topN, sf.couplingMinChanges)
 	}
 	if showAll || sf.stat == "churn-risk" {
-		report["churn_risk"] = stats.ChurnRisk(ds, sf.topN, sf.churnHalfLife)
+		report["churn_risk"] = stats.ChurnRisk(ds, sf.topN)
 	}
 	if showAll || sf.stat == "working-patterns" {
 		report["working_patterns"] = stats.WorkingPatterns(ds)
@@ -438,7 +438,7 @@ func ciCmd() *cobra.Command {
 						violations = append(violations, ciViolation{
 							File:    bf.Path,
 							Rule:    "busfactor",
-							Message: fmt.Sprintf("Bus factor %d (only %s)", bf.BusFactor, joinDevs(bf.TopDevs)),
+							Message: fmt.Sprintf("Bus factor %d (only %s)", bf.BusFactor, stats.JoinDevs(bf.TopDevs)),
 							Level:   "warning",
 						})
 					}
@@ -446,7 +446,7 @@ func ciCmd() *cobra.Command {
 			}
 
 			if churnThreshold > 0 {
-				for _, cr := range stats.ChurnRisk(ds, 0, halfLife) {
+				for _, cr := range stats.ChurnRisk(ds, 0) {
 					if cr.RiskScore >= churnThreshold {
 						violations = append(violations, ciViolation{
 							File:    cr.Path,
@@ -500,12 +500,6 @@ type ciViolation struct {
 	Level   string `json:"level"`
 }
 
-func joinDevs(devs []string) string {
-	if len(devs) <= 3 {
-		return fmt.Sprintf("%v", devs)
-	}
-	return fmt.Sprintf("%v +%d more", devs[:3], len(devs)-3)
-}
 
 func printGitlabCodeQuality(violations []ciViolation) {
 	type glIssue struct {
@@ -566,9 +560,7 @@ func reportCmd() *cobra.Command {
 			defer f.Close()
 
 			sf := stats.StatsFlags{
-				CouplingMaxFiles:   couplingMaxFiles,
 				CouplingMinChanges: couplingMinChanges,
-				ChurnHalfLife:      churnHalfLife,
 				NetworkMinFiles:    networkMinFiles,
 			}
 
