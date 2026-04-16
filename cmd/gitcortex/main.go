@@ -78,16 +78,18 @@ var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
 var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
 var validStats = map[string]bool{
 	"summary": true, "contributors": true, "hotspots": true,
-	"activity": true, "busfactor": true,
+	"activity": true, "busfactor": true, "coupling": true,
 }
 
 func statsCmd() *cobra.Command {
 	var (
-		input       string
-		format      string
-		topN        int
-		granularity string
-		stat        string
+		input              string
+		format             string
+		topN               int
+		granularity        string
+		stat               string
+		couplingMaxFiles   int
+		couplingMinChanges int
 	)
 
 	cmd := &cobra.Command{
@@ -101,7 +103,7 @@ func statsCmd() *cobra.Command {
 				return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", granularity)
 			}
 			if stat != "" && !validStats[stat] {
-				return fmt.Errorf("invalid --stat %q; must be one of: summary, contributors, hotspots, activity, busfactor", stat)
+				return fmt.Errorf("invalid --stat %q; must be one of: summary, contributors, hotspots, activity, busfactor, coupling", stat)
 			}
 
 			ds, err := stats.LoadJSONL(input)
@@ -116,7 +118,7 @@ func statsCmd() *cobra.Command {
 			f := stats.NewFormatter(os.Stdout, format)
 
 			if format == "json" {
-				return printStatsJSON(f, ds, topN, granularity, stat)
+				return printStatsJSON(f, ds, topN, granularity, stat, couplingMaxFiles, couplingMinChanges)
 			}
 
 			if showAll || stat == "summary" {
@@ -149,6 +151,12 @@ func statsCmd() *cobra.Command {
 					return err
 				}
 			}
+			if showAll || stat == "coupling" {
+				fmt.Fprintf(os.Stderr, "\n=== Top %d File Coupling ===\n", topN)
+				if err := f.PrintCoupling(stats.FileCoupling(ds, topN, couplingMaxFiles, couplingMinChanges)); err != nil {
+					return err
+				}
+			}
 
 			return nil
 		},
@@ -158,12 +166,14 @@ func statsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries to show")
 	cmd.Flags().StringVar(&granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&stat, "stat", "", "Show only a specific stat: summary, contributors, hotspots, activity, busfactor")
+	cmd.Flags().StringVar(&stat, "stat", "", "Show only a specific stat: summary, contributors, hotspots, activity, busfactor, coupling")
+	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis (filters bulk commits)")
+	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes to include in coupling results")
 
 	return cmd
 }
 
-func printStatsJSON(f *stats.Formatter, ds *stats.Dataset, topN int, granularity, stat string) error {
+func printStatsJSON(f *stats.Formatter, ds *stats.Dataset, topN int, granularity, stat string, couplingMaxFiles, couplingMinChanges int) error {
 	showAll := stat == ""
 	report := make(map[string]interface{})
 
@@ -181,6 +191,9 @@ func printStatsJSON(f *stats.Formatter, ds *stats.Dataset, topN int, granularity
 	}
 	if showAll || stat == "busfactor" {
 		report["busfactor"] = stats.BusFactor(ds, topN)
+	}
+	if showAll || stat == "coupling" {
+		report["coupling"] = stats.FileCoupling(ds, topN, couplingMaxFiles, couplingMinChanges)
 	}
 
 	return f.PrintReport(report)

@@ -159,6 +159,33 @@ func (f *Formatter) PrintBusFactor(results []BusFactorResult) error {
 	}
 }
 
+func (f *Formatter) PrintCoupling(results []CouplingResult) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(results)
+	case "csv":
+		rows := make([][]string, len(results))
+		for i, r := range results {
+			rows[i] = []string{
+				r.FileA, r.FileB,
+				fmt.Sprintf("%d", r.CoChanges),
+				fmt.Sprintf("%.0f", r.CouplingPct),
+				fmt.Sprintf("%d", r.ChangesA),
+				fmt.Sprintf("%d", r.ChangesB),
+			}
+		}
+		return f.writeCSV([]string{"file_a", "file_b", "co_changes", "coupling_pct", "changes_a", "changes_b"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "FILE A\tFILE B\tCO-CHANGES\tCOUPLING\tCHANGES A\tCHANGES B\n")
+		fmt.Fprintf(tw, "------\t------\t----------\t--------\t---------\t---------\n")
+		for _, r := range results {
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%.0f%%\t%d\t%d\n", r.FileA, r.FileB, r.CoChanges, r.CouplingPct, r.ChangesA, r.ChangesB)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintReport(v interface{}) error {
 	return f.writeJSON(v)
 }

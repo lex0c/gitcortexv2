@@ -317,3 +317,99 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 	return result
 }
 
+type CouplingResult struct {
+	FileA       string
+	FileB       string
+	CoChanges   int
+	CouplingPct float64
+	ChangesA    int
+	ChangesB    int
+}
+
+// FileCoupling finds files that frequently change together in the same commits.
+// maxFilesPerCommit filters out bulk commits (renames, imports) that add noise.
+// minCoChanges sets the minimum co-occurrence threshold.
+func FileCoupling(ds *Dataset, n, maxFilesPerCommit, minCoChanges int) []CouplingResult {
+	commitFiles := make(map[string][]string)
+	for _, f := range ds.Files {
+		path := f.PathCurrent
+		if path == "" {
+			path = f.PathPrevious
+		}
+		if path == "" {
+			continue
+		}
+		commitFiles[f.Commit] = append(commitFiles[f.Commit], path)
+	}
+
+	fileChanges := make(map[string]int)
+	type pair struct{ a, b string }
+	pairCount := make(map[pair]int)
+
+	for _, files := range commitFiles {
+		if len(files) < 2 || len(files) > maxFilesPerCommit {
+			continue
+		}
+
+		seen := make(map[string]bool, len(files))
+		unique := make([]string, 0, len(files))
+		for _, f := range files {
+			if !seen[f] {
+				seen[f] = true
+				unique = append(unique, f)
+				fileChanges[f]++
+			}
+		}
+
+		for i := 0; i < len(unique); i++ {
+			for j := i + 1; j < len(unique); j++ {
+				a, b := unique[i], unique[j]
+				if a > b {
+					a, b = b, a
+				}
+				pairCount[pair{a, b}]++
+			}
+		}
+	}
+
+	var results []CouplingResult
+	for p, count := range pairCount {
+		if count < minCoChanges {
+			continue
+		}
+
+		ca, cb := fileChanges[p.a], fileChanges[p.b]
+		denom := ca
+		if cb < denom {
+			denom = cb
+		}
+
+		pct := 0.0
+		if denom > 0 {
+			pct = float64(count) / float64(denom) * 100
+		}
+
+		results = append(results, CouplingResult{
+			FileA:       p.a,
+			FileB:       p.b,
+			CoChanges:   count,
+			CouplingPct: pct,
+			ChangesA:    ca,
+			ChangesB:    cb,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].CoChanges != results[j].CoChanges {
+			return results[i].CoChanges > results[j].CoChanges
+		}
+		return results[i].CouplingPct > results[j].CouplingPct
+	})
+
+	if n > 0 && n < len(results) {
+		results = results[:n]
+	}
+
+	return results
+}
+
