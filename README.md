@@ -51,8 +51,10 @@ Or build from source:
 ```bash
 git clone https://github.com/your-org/gitcortex.git
 cd gitcortex
-go build -o gitcortex ./cmd/gitcortex/
+make build
 ```
+
+Other targets: `make test`, `make vet`, `make check` (vet + test), `make install`, `make clean`.
 
 Requires Git 2.31+ and Go 1.21+.
 

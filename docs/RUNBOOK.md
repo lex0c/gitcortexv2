@@ -6,11 +6,14 @@ Operational guide for extracting git metrics and generating stats at any scale.
 
 ```bash
 # Build
-go build -o gitcortex ./cmd/gitcortex/
+make build
 
 # Extract + stats in one go
 ./gitcortex extract --repo /path/to/repo
 ./gitcortex stats
+
+# Run tests
+make check
 ```
 
 ## Extract
