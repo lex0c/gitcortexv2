@@ -40,17 +40,3 @@ gitcortex ci --input data.jsonl \
 ```
 
 Emit GitHub Actions annotations, GitLab code quality reports, or generic SARIF. Flag files with bus factor 1 and high churn risk as warnings in pull requests. Could also track metrics over time and fail on regressions.
-
-## 4. `.mailmap` support
-
-Respect git's `.mailmap` file to unify developer identities.
-
-Currently, the same developer with different emails (e.g., `alice@work.com` and `alice@personal.com`) appears as separate contributors, splitting their stats across identities.
-
-Git's `.mailmap` format already solves this:
-
-```
-Alice Developer <alice@work.com> <alice@personal.com>
-```
-
-Implementation: parse `.mailmap` during extraction, normalize author/committer emails before emitting records. Affects all downstream stats (contributors, ranking, bus factor, coupling, dev network).

@@ -31,6 +31,18 @@ The default branch is auto-detected (`origin/HEAD` > `main` > `master` > `HEAD`)
 ./gitcortex extract --repo /path/to/repo --branch develop
 ```
 
+### Normalize identities with .mailmap
+
+Unify developer identities using the repo's `.mailmap` file:
+
+```bash
+./gitcortex extract --repo /path/to/repo --mailmap
+```
+
+Without `--mailmap`, the same person with different emails appears as separate contributors, splitting their stats. With it, git normalizes names and emails before extraction.
+
+Requires a `.mailmap` file in the repo root or `~/.mailmap`. See `man gitmailmap` for format details.
+
 ### Include commit messages
 
 Messages are excluded by default to save space. Enable with:

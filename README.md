@@ -72,9 +72,14 @@ gitcortex extract --repo /path/to/repo --include-commit-messages
 
 # Custom output path
 gitcortex extract --repo /path/to/repo --output data.jsonl
+
+# Normalize author identities via .mailmap
+gitcortex extract --repo /path/to/repo --mailmap
 ```
 
 The default branch is auto-detected from `origin/HEAD`, falling back to `main`, `master`, or `HEAD`.
+
+The `--mailmap` flag uses git's built-in `.mailmap` support to unify developer identities. Without it, the same person with different emails (e.g., `alice@work.com` and `alice@personal.com`) appears as separate contributors.
 
 Output is a JSONL file with one record per line. Four record types:
 
