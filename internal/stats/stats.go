@@ -580,28 +580,20 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		}
 
 		// Collaborators: devs sharing files with this dev
-		var collabs []DevCollaborator
-		for path, fe := range ds.files {
+		collabMap := make(map[string]int)
+		for _, fe := range ds.files {
 			if _, ok := fe.devLines[email]; !ok {
 				continue
 			}
 			for otherEmail := range fe.devLines {
-				if otherEmail == email {
-					continue
-				}
-				_ = path
-				found := false
-				for i := range collabs {
-					if collabs[i].Email == otherEmail {
-						collabs[i].SharedFiles++
-						found = true
-						break
-					}
-				}
-				if !found {
-					collabs = append(collabs, DevCollaborator{Email: otherEmail, SharedFiles: 1})
+				if otherEmail != email {
+					collabMap[otherEmail]++
 				}
 			}
+		}
+		var collabs []DevCollaborator
+		for e, count := range collabMap {
+			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: count})
 		}
 		sort.Slice(collabs, func(i, j int) bool { return collabs[i].SharedFiles > collabs[j].SharedFiles })
 		if len(collabs) > 5 {
