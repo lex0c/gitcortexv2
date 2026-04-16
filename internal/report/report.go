@@ -62,18 +62,18 @@ func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) err
 	return tmpl.Execute(w, data)
 }
 
-func pct(val, max int64) float64 {
+func pct(val, max int64) string {
 	if max == 0 {
-		return 0
+		return "0"
 	}
-	return float64(val) / float64(max) * 100
+	return fmt.Sprintf("%.1f", float64(val)/float64(max)*100)
 }
 
-func pctInt(val, max int) float64 {
+func pctInt(val, max int) string {
 	if max == 0 {
-		return 0
+		return "0"
 	}
-	return float64(val) / float64(max) * 100
+	return fmt.Sprintf("%.1f", float64(val)/float64(max)*100)
 }
 
 func heatColor(val, max int) string {
