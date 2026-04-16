@@ -337,15 +337,3 @@ JSONL file ---- line by line ----> aggregate ----> lean Dataset ----> stat funct
                                     files:   path → {commits, devs, churn}
                                     coupling: computed on-the-fly
 ```
-
-Memory usage for the Linux kernel (1.4M commits, 3M file records):
-
-| | Raw storage | Streaming aggregation |
-|--|-------------|----------------------|
-| Commit data | 700 MB (1.4M structs) | 184 MB (lean index) |
-| File data | 1,200 MB (3M structs) | 44 MB (172K aggregated) |
-| **Total** | **~2.1 GB** | **~360 MB** |
-
-## License
-
-MIT
