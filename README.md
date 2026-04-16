@@ -113,6 +113,9 @@ gitcortex stats --input data.jsonl
 # Individual stat
 gitcortex stats --input data.jsonl --stat contributors --top 20
 
+# Multi-repo: aggregate stats across repositories
+gitcortex stats --input svc-auth.jsonl --input svc-payments.jsonl --input svc-gateway.jsonl
+
 # Export as CSV or JSON
 gitcortex stats --input data.jsonl --stat hotspots --format csv > hotspots.csv
 gitcortex stats --input data.jsonl --format json > report.json
@@ -127,6 +130,7 @@ Available stats:
 |------|-------------|
 | `summary` | Total commits, devs, files, additions/deletions, merge count, averages, date range |
 | `contributors` | Ranked by commit count with additions/deletions per developer |
+| `ranking` | Composite contributor score (commits, lines, files touched, active days) |
 | `hotspots` | Most frequently changed files with churn and unique developer count |
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
@@ -207,6 +211,22 @@ DEV A                          DEV B            SHARED FILES  WEIGHT
 alice@company.com              bob@company.com  142           34.5%
 carol@company.com              alice@company.com 87           21.2%
 ```
+
+### Multi-repo
+
+Aggregate stats across multiple repositories. File paths are automatically prefixed with the filename to avoid collisions.
+
+```bash
+# Extract each repo
+gitcortex extract --repo ./svc-auth --output auth.jsonl
+gitcortex extract --repo ./svc-payments --output payments.jsonl
+
+# Aggregate stats
+gitcortex stats --input auth.jsonl --input payments.jsonl
+gitcortex stats --input auth.jsonl --input payments.jsonl --stat coupling --top 20
+```
+
+Paths appear as `auth:src/main.go` and `payments:src/main.go`. Contributors are deduped by email across repos — the same developer contributing to both repos is counted once.
 
 ### Diff: compare time periods
 

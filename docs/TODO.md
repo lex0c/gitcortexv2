@@ -14,21 +14,7 @@ Local HTTP server rendering stats as interactive visualizations.
 
 Transforms the CLI from a personal tool into a team tool. Could use embedded static assets (no external dependencies) with a lightweight charting library.
 
-## 2. Multi-repo aggregation
-
-Aggregate stats across multiple repositories into a single report.
-
-```bash
-gitcortex extract --repo ./svc-auth --output data/auth.jsonl
-gitcortex extract --repo ./svc-payments --output data/payments.jsonl
-gitcortex extract --repo ./svc-gateway --output data/gateway.jsonl
-
-gitcortex stats --input data/*.jsonl
-```
-
-Essential for microservice architectures where no single repo tells the full story. Requires prefixing file paths with repo name to avoid collisions. Contributor and coupling analysis across repo boundaries would reveal cross-team dependencies.
-
-## 3. CI integration
+## 2. CI integration
 
 Output format compatible with CI systems for automated quality gates.
 

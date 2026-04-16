@@ -152,6 +152,16 @@ Section headers go to stderr, data to stdout. To capture only data:
 ./gitcortex stats --input data.jsonl --format json > report.json
 ```
 
+### Multi-repo
+
+Aggregate stats across repositories:
+
+```bash
+./gitcortex stats --input svc-a.jsonl --input svc-b.jsonl --input svc-c.jsonl
+```
+
+File paths are prefixed automatically (`svc-a:src/main.go`). Contributors are deduped by email across repos.
+
 ### Tuning stats parameters
 
 **Coupling analysis:**
