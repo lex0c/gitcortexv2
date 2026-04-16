@@ -56,7 +56,8 @@ type Dataset struct {
 	couplingPairs       map[filePair]int
 	couplingFileChanges map[string]int
 
-	// Contributor detail accumulators (internal, used to finalize ContributorStat)
+	// Internal accumulators
+	devSeen      map[string]struct{}            // dedup dev records across files
 	contribDays  map[string]map[string]struct{} // email → set of active dates
 	contribFiles map[string]map[string]struct{} // email → set of file paths
 	contribFirst map[string]time.Time           // email → earliest date
@@ -121,6 +122,7 @@ func newDataset() *Dataset {
 		files:               make(map[string]*fileEntry),
 		couplingPairs:       make(map[filePair]int),
 		couplingFileChanges: make(map[string]int),
+		devSeen:             make(map[string]struct{}),
 		contribDays:         make(map[string]map[string]struct{}),
 		contribFiles:        make(map[string]map[string]struct{}),
 		contribFirst:        make(map[string]time.Time),
@@ -129,7 +131,6 @@ func newDataset() *Dataset {
 }
 
 func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string) error {
-	devSeen := make(map[string]struct{})
 	uniqueFiles := make(map[string]struct{})
 	commitInRange := make(map[string]bool)
 
@@ -319,8 +320,8 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			if err := json.Unmarshal(line, &d); err != nil {
 				return fmt.Errorf("line %d: parse dev: %w", lineNum, err)
 			}
-			if _, seen := devSeen[d.DevID]; !seen {
-				devSeen[d.DevID] = struct{}{}
+			if _, seen := ds.devSeen[d.DevID]; !seen {
+				ds.devSeen[d.DevID] = struct{}{}
 				ds.DevCount++
 			}
 		}

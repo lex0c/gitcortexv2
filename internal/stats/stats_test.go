@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -483,5 +484,133 @@ func TestParseDate(t *testing.T) {
 		if got.IsZero() != tt.zero {
 			t.Errorf("parseDate(%q).IsZero() = %v, want %v", tt.in, got.IsZero(), tt.zero)
 		}
+	}
+}
+
+func TestLoadMultiJSONL(t *testing.T) {
+	repoA := `{"type":"commit","sha":"a1","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-10T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-01-10T10:00:00Z","message":"","additions":10,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"a1","path_current":"main.go","path_previous":"main.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":10,"deletions":2}
+{"type":"dev","dev_id":"d1","name":"Alice","email":"alice@x.com"}
+`
+	repoB := `{"type":"commit","sha":"b1","tree":"t","parents":[],"author_name":"Bob","author_email":"bob@x.com","author_date":"2024-02-15T14:00:00Z","committer_name":"Bob","committer_email":"bob@x.com","committer_date":"2024-02-15T14:00:00Z","message":"","additions":20,"deletions":5,"files_changed":2}
+{"type":"commit_file","commit":"b1","path_current":"main.go","path_previous":"main.go","status":"M","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":15,"deletions":3}
+{"type":"commit_file","commit":"b1","path_current":"util.go","path_previous":"util.go","status":"A","old_hash":"0","new_hash":"3","old_size":0,"new_size":0,"additions":5,"deletions":2}
+{"type":"dev","dev_id":"d2","name":"Bob","email":"bob@x.com"}
+`
+	// Write temp files
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	pathA := dirA + "/repo-a.jsonl"
+	pathB := dirB + "/repo-b.jsonl"
+	os.WriteFile(pathA, []byte(repoA), 0o644)
+	os.WriteFile(pathB, []byte(repoB), 0o644)
+
+	ds, err := LoadMultiJSONL([]string{pathA, pathB}, LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+
+	// Commits aggregate
+	if ds.CommitCount != 2 {
+		t.Errorf("CommitCount = %d, want 2", ds.CommitCount)
+	}
+
+	// Additions aggregate
+	if ds.TotalAdditions != 30 {
+		t.Errorf("TotalAdditions = %d, want 30", ds.TotalAdditions)
+	}
+
+	// Devs dedup across repos
+	if ds.DevCount != 2 {
+		t.Errorf("DevCount = %d, want 2", ds.DevCount)
+	}
+
+	// Paths should be prefixed
+	if _, ok := ds.files["repo-a:main.go"]; !ok {
+		t.Error("missing repo-a:main.go (expected prefix)")
+	}
+	if _, ok := ds.files["repo-b:main.go"]; !ok {
+		t.Error("missing repo-b:main.go (expected prefix)")
+	}
+	if _, ok := ds.files["repo-b:util.go"]; !ok {
+		t.Error("missing repo-b:util.go")
+	}
+
+	// No collision: repo-a:main.go and repo-b:main.go are separate
+	if ds.UniqueFileCount != 3 {
+		t.Errorf("UniqueFileCount = %d, want 3", ds.UniqueFileCount)
+	}
+
+	// Contributors from both repos
+	if len(ds.contributors) != 2 {
+		t.Errorf("contributors = %d, want 2", len(ds.contributors))
+	}
+}
+
+func TestLoadMultiJSONLSharedDev(t *testing.T) {
+	// Same dev in both repos — should be deduped
+	repoA := `{"type":"commit","sha":"a1","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-10T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-01-10T10:00:00Z","message":"","additions":5,"deletions":1,"files_changed":1}
+{"type":"commit_file","commit":"a1","path_current":"f.go","path_previous":"f.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":5,"deletions":1}
+{"type":"dev","dev_id":"d1","name":"Alice","email":"alice@x.com"}
+`
+	repoB := `{"type":"commit","sha":"b1","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-02-01T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-02-01T10:00:00Z","message":"","additions":8,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"b1","path_current":"g.go","path_previous":"g.go","status":"A","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":8,"deletions":2}
+{"type":"dev","dev_id":"d1","name":"Alice","email":"alice@x.com"}
+`
+	dir := t.TempDir()
+	pathA := dir + "/svc-a.jsonl"
+	pathB := dir + "/svc-b.jsonl"
+	os.WriteFile(pathA, []byte(repoA), 0o644)
+	os.WriteFile(pathB, []byte(repoB), 0o644)
+
+	ds, err := LoadMultiJSONL([]string{pathA, pathB}, LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+
+	// Dev dedup: same email across repos = 1 dev
+	if ds.DevCount != 1 {
+		t.Errorf("DevCount = %d, want 1 (deduped)", ds.DevCount)
+	}
+
+	// Commits aggregate across repos
+	alice := ds.contributors["alice@x.com"]
+	if alice == nil {
+		t.Fatal("alice not found")
+	}
+	if alice.Commits != 2 {
+		t.Errorf("alice commits = %d, want 2", alice.Commits)
+	}
+	if alice.Additions != 13 {
+		t.Errorf("alice additions = %d, want 13", alice.Additions)
+	}
+	if alice.ActiveDays != 2 {
+		t.Errorf("alice active days = %d, want 2", alice.ActiveDays)
+	}
+	if alice.FilesTouched != 2 {
+		t.Errorf("alice files = %d, want 2 (svc-a:f.go + svc-b:g.go)", alice.FilesTouched)
+	}
+}
+
+func TestLoadMultiJSONLSingleFile(t *testing.T) {
+	// Single file should NOT prefix paths
+	jsonl := `{"type":"commit","sha":"a1","tree":"t","parents":[],"author_name":"A","author_email":"a@x","author_date":"2024-01-01T00:00:00Z","committer_name":"A","committer_email":"a@x","committer_date":"2024-01-01T00:00:00Z","message":"","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"a1","path_current":"main.go","path_previous":"main.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":5,"deletions":0}
+`
+	dir := t.TempDir()
+	path := dir + "/data.jsonl"
+	os.WriteFile(path, []byte(jsonl), 0o644)
+
+	ds, err := LoadMultiJSONL([]string{path}, LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+
+	// Single file: no prefix
+	if _, ok := ds.files["main.go"]; !ok {
+		t.Error("single file should NOT have prefix, missing main.go")
+	}
+	if _, ok := ds.files["data:main.go"]; ok {
+		t.Error("single file should NOT have prefix, found data:main.go")
 	}
 }
