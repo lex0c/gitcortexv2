@@ -245,7 +245,15 @@ Shows side-by-side delta for summary, contributors, and hotspots.
 ./gitcortex report --input data.jsonl --output report.html --top 30
 ```
 
-Self-contained HTML file with all 12 stats visualized. Open directly in a browser, share via Slack/email, or upload as a CI artifact.
+Self-contained HTML file with all stats visualized. Open directly in a browser, share via Slack/email, or upload as a CI artifact.
+
+### Generate developer profile report
+
+```bash
+./gitcortex report --input data.jsonl --email alice@company.com --output alice.html
+```
+
+Shareable HTML page for one developer. Includes summary cards, scope, contribution type, collaboration, top files, activity heatmap, and working hours heatmap.
 
 ## CI
 

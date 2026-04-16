@@ -267,6 +267,9 @@ Generate a self-contained HTML dashboard with all stats visualized. Pure HTML+CS
 ```bash
 gitcortex report --input data.jsonl --output report.html
 gitcortex report --input data.jsonl --output report.html --top 30
+
+# Per-developer profile report (shareable with managers)
+gitcortex report --input data.jsonl --email alice@company.com --output alice.html
 ```
 
 Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
