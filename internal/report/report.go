@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"sort"
 
 	"gitcortex/internal/stats"
 )
@@ -13,7 +14,9 @@ type ReportData struct {
 	Summary      stats.Summary
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
-	Activity     []EnrichedActivity
+	ActivityYears  []string
+	ActivityGrid   [][]ActivityCell // [year][month 0-11]
+	MaxActivityCommits int
 	BusFactor    []stats.BusFactorResult
 	Coupling     []stats.CouplingResult
 	ChurnRisk    []stats.ChurnRiskResult
@@ -23,7 +26,67 @@ type ReportData struct {
 	Profiles     []stats.DevProfile
 	PatternGrid    [7][24]int
 	MaxPattern     int
-	MaxActivityLines int64
+}
+
+type ActivityCell struct {
+	Commits   int
+	Additions int64
+	Deletions int64
+	Ratio     float64
+	HasData   bool
+}
+
+func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, int) {
+	// Parse periods into year+month, build grid
+	type key struct{ year, month int }
+	cells := make(map[key]*ActivityCell)
+	yearSet := make(map[int]bool)
+	maxCommits := 0
+
+	for _, a := range raw {
+		if len(a.Period) < 7 {
+			continue
+		}
+		var y, m int
+		fmt.Sscanf(a.Period, "%d-%d", &y, &m)
+		if y == 0 || m == 0 {
+			continue
+		}
+		yearSet[y] = true
+		ratio := 0.0
+		if a.Additions > 0 {
+			ratio = float64(a.Deletions) / float64(a.Additions)
+		}
+		cells[key{y, m - 1}] = &ActivityCell{
+			Commits: a.Commits, Additions: a.Additions, Deletions: a.Deletions,
+			Ratio: ratio, HasData: true,
+		}
+		if a.Commits > maxCommits {
+			maxCommits = a.Commits
+		}
+	}
+
+	// Sort years
+	years := make([]int, 0, len(yearSet))
+	for y := range yearSet {
+		years = append(years, y)
+	}
+	sort.Ints(years)
+
+	yearLabels := make([]string, len(years))
+	grid := make([][]ActivityCell, len(years))
+	for i, y := range years {
+		yearLabels[i] = fmt.Sprintf("%d", y)
+		row := make([]ActivityCell, 12)
+		for m := 0; m < 12; m++ {
+			if c, ok := cells[key{y, m}]; ok {
+				row[m] = *c
+			}
+		}
+		grid[i] = row
+	}
+
+	return yearLabels, grid, maxCommits
 }
 
 type EnrichedActivity struct {
@@ -116,24 +179,25 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		}
 	}
 
-	activityEnriched, maxActLines := enrichActivity(stats.ActivityOverTime(ds, "month"))
+	actYears, actGrid, maxActCommits := buildActivityGrid(stats.ActivityOverTime(ds, "month"))
 
 	data := ReportData{
-		RepoName:     repoName,
-		Summary:      stats.ComputeSummary(ds),
-		Contributors: stats.TopContributors(ds, topN),
-		Hotspots:     stats.FileHotspots(ds, topN),
-		Activity:     activityEnriched,
-		BusFactor:    stats.BusFactor(ds, topN),
-		Coupling:     stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:    stats.ChurnRisk(ds, topN),
-		Patterns:     patterns,
-		TopCommits:   stats.TopCommits(ds, topN),
-		DevNetwork:   stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
-		Profiles:     stats.DevProfiles(ds, ""),
-		PatternGrid:      grid,
-		MaxPattern:       maxP,
-		MaxActivityLines: maxActLines,
+		RepoName:           repoName,
+		Summary:            stats.ComputeSummary(ds),
+		Contributors:       stats.TopContributors(ds, topN),
+		Hotspots:           stats.FileHotspots(ds, topN),
+		ActivityYears:      actYears,
+		ActivityGrid:       actGrid,
+		MaxActivityCommits: maxActCommits,
+		BusFactor:          stats.BusFactor(ds, topN),
+		Coupling:           stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
+		ChurnRisk:          stats.ChurnRisk(ds, topN),
+		Patterns:           patterns,
+		TopCommits:         stats.TopCommits(ds, topN),
+		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
+		Profiles:           stats.DevProfiles(ds, ""),
+		PatternGrid:        grid,
+		MaxPattern:         maxP,
 	}
 
 	return tmpl.Execute(w, data)
@@ -190,6 +254,38 @@ func plus(a, b int64) int64 {
 	return a + b
 }
 
+func plusInt(a, b int) int {
+	return a + b
+}
+
+func actColor(commits, max int) string {
+	if max == 0 || commits == 0 {
+		return "#ebedf0"
+	}
+	intensity := float64(commits) / float64(max)
+	if intensity > 1 {
+		intensity = 1
+	}
+	// GitHub-style green gradient
+	if intensity < 0.25 {
+		return "#9be9a8"
+	} else if intensity < 0.5 {
+		return "#40c463"
+	} else if intensity < 0.75 {
+		return "#30a14e"
+	}
+	return "#216e39"
+}
+
+func ratioColor(ratio float64) string {
+	if ratio >= 1.0 {
+		return "#cf222e"
+	} else if ratio >= 0.5 {
+		return "#bf8700"
+	}
+	return "#2da44e"
+}
+
 var funcMap = template.FuncMap{
 	"pct":       pct,
 	"pctInt":    pctInt,
@@ -198,8 +294,11 @@ var funcMap = template.FuncMap{
 	"joinDevs":  stats.JoinDevs,
 	"seq":       seq,
 	"list":      list,
-	"int64":     toInt64,
-	"plus":      plus,
+	"int64":      toInt64,
+	"plus":       plus,
+	"actColor":   actColor,
+	"ratioColor": ratioColor,
+	"plusInt":    plusInt,
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(reportHTML))

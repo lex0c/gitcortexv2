@@ -52,31 +52,26 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Merges</div><div class="value">{{.Summary.MergeCommits}}</div></div>
 </div>
 
-{{if .Activity}}
+{{if .ActivityYears}}
 <h2>Activity</h2>
-<p class="hint">Green = additions, red = deletions. Ratio = del/add (0 = pure growth, ~1 = rewrite, >1 = cleanup). Trend vs previous period. MA = 3-period moving average.</p>
-{{$max := .MaxActivityLines}}
-<div style="display:flex; flex-direction:column; gap:3px;">
-{{range .Activity}}
-<div style="display:flex; align-items:center; gap:6px; font-size:12px;">
-  <span class="mono" style="min-width:55px; text-align:right; color:#656d76;">{{.Period}}</span>
-  <div style="flex:1; display:flex; height:18px;">
-    <div class="bar bar-add" style="width: {{pct .Additions $max}}%" title="{{.Additions}} additions"></div>
-    <div class="bar bar-del" style="width: {{pct .Deletions $max}}%" title="{{.Deletions}} deletions"></div>
-  </div>
-  <span style="min-width:22px; text-align:center;">{{.Trend}}</span>
-  <span class="mono" style="min-width:55px; text-align:right;">{{.Commits}}</span>
-  <span class="mono" style="min-width:45px; text-align:right; color:{{if eq .RatioClass "growth"}}#2da44e{{else if eq .RatioClass "rewrite"}}#bf8700{{else}}#cf222e{{end}};">{{.Ratio}}</span>
-  <span class="mono" style="min-width:40px; text-align:right; color:#656d76;">~{{.MovingAvg}}</span>
+<p class="hint">Monthly commit heatmap. Darker = more commits. Hover for details (commits, additions, deletions, del/add ratio).</p>
+{{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
+<div style="display:grid; grid-template-columns:40px repeat(12, 1fr); gap:2px; margin-bottom:8px;">
+  <div></div>
+  {{range (list "J" "F" "M" "A" "M" "J" "J" "A" "S" "O" "N" "D")}}<div style="text-align:center; font-size:10px; color:#656d76;">{{.}}</div>{{end}}
+  {{range $y, $year := $.ActivityYears}}
+  <div class="mono" style="font-size:11px; color:#656d76; display:flex; align-items:center;">{{$year}}</div>
+  {{range $m := seq 0 11}}{{$cell := index (index $grid $y) $m}}<div style="aspect-ratio:1.6; border-radius:2px; background:{{actColor $cell.Commits $max}}; display:flex; align-items:center; justify-content:center; font-size:9px; {{if $cell.HasData}}color:#fff;{{else}}color:transparent;{{end}}" title="{{$year}}-{{printf "%02d" (plusInt $m 1)}}:  {{$cell.Commits}} commits  +{{$cell.Additions}} -{{$cell.Deletions}}{{if and $cell.HasData (gt $cell.Additions 0)}}  ratio {{printf "%.2f" $cell.Ratio}}{{end}}">{{if $cell.HasData}}{{$cell.Commits}}{{end}}</div>{{end}}
+  {{end}}
 </div>
-{{end}}
-</div>
-<div style="font-size:11px; color:#656d76; margin-top:6px; display:flex; gap:16px;">
-  <span>↑↓→ trend</span>
-  <span style="color:#2da44e;">■</span> <span>additions</span>
-  <span style="color:#cf222e;">■</span> <span>deletions</span>
-  <span>ratio: <span style="color:#2da44e;">growth</span> · <span style="color:#bf8700;">rewrite</span> · <span style="color:#cf222e;">cleanup</span></span>
-  <span>~MA = 3-period avg</span>
+<div style="font-size:11px; color:#656d76; display:flex; gap:4px; align-items:center;">
+  <span>Less</span>
+  <div style="width:12px; height:12px; background:#ebedf0; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#9be9a8; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#40c463; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#30a14e; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#216e39; border-radius:2px;"></div>
+  <span>More</span>
 </div>
 {{end}}
 
