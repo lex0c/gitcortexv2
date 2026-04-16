@@ -10,10 +10,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"gitcortex/internal/git"
@@ -94,16 +92,6 @@ func LoadState(stateFile string, flagOffset int, flagSHA string) (State, error) 
 	return State{CommitOffset: count}, nil
 }
 
-type devCandidate struct {
-	name  string
-	email string
-}
-
-type commitPayload struct {
-	entries []interface{}
-	devs    []devCandidate
-}
-
 func Run(ctx context.Context, cfg Config) error {
 	git.DebugLogging = cfg.Debug
 
@@ -131,51 +119,49 @@ func Run(ctx context.Context, cfg Config) error {
 			log.Printf("resume: loaded %d known dev emails from %s", len(devCache), cfg.Output)
 		}
 	}
+
 	writer := bufio.NewWriter(out)
 	defer writer.Flush()
 
-	policy := git.DiscardPolicy{WarnLimit: cfg.DiscardWarnLimit, FailOnExcess: cfg.DiscardError}
-
-	return processCommits(ctx, cfg.Repo, cfg.Branch, initialState, cfg.BatchSize,
-		cfg.StateFile, cfg.CommandTimeout, writer, devCache, policy,
-		cfg.IncludeMessages, cfg.FirstParent)
+	return streamExtract(ctx, cfg, initialState, writer, devCache)
 }
 
-func processCommits(
-	ctx context.Context,
-	repo, branch string,
-	initialState State,
-	batchSize int,
-	stateFile string,
-	commandTimeout time.Duration,
-	writer *bufio.Writer,
-	devCache map[string]struct{},
-	policy git.DiscardPolicy,
-	includeMessages, firstParent bool,
-) error {
+func streamExtract(ctx context.Context, cfg Config, initialState State, writer *bufio.Writer, devCache map[string]struct{}) error {
+	resumeSHA := initialState.LastProcessedSHA
 	processedCount := initialState.CommitOffset
-	lastProcessedSHA := initialState.LastProcessedSHA
 
-	if lastProcessedSHA != "" {
-		index, err := git.FindCommitIndex(ctx, repo, branch, lastProcessedSHA, commandTimeout, firstParent)
-		if err != nil {
-			return fmt.Errorf("locate last processed sha %s: %w", lastProcessedSHA, err)
-		}
-		processedCount = index + 1
-	}
-
-	if lastProcessedSHA == "" && processedCount > 0 {
-		sha, err := git.CommitAtOffset(ctx, repo, branch, processedCount-1, commandTimeout, firstParent)
+	// Resolve offset-only state to a SHA for range-based resume
+	if resumeSHA == "" && processedCount > 0 {
+		sha, err := git.CommitAtOffset(ctx, cfg.Repo, cfg.Branch, processedCount-1, cfg.CommandTimeout, cfg.FirstParent)
 		if err != nil {
 			return fmt.Errorf("resolve commit offset %d: %w", processedCount, err)
 		}
 		if sha == "" {
 			return fmt.Errorf("commit offset %d exceeds history length", processedCount)
 		}
-		lastProcessedSHA = sha
+		resumeSHA = sha
+	}
+
+	streamer, err := git.NewLogStreamer(ctx, cfg.Repo, cfg.Branch, resumeSHA, cfg.FirstParent, cfg.IncludeMessages)
+	if err != nil {
+		return fmt.Errorf("start log stream: %w", err)
+	}
+	defer streamer.Close()
+
+	resolver, err := git.NewBlobSizeResolver(ctx, cfg.Repo)
+	if err != nil {
+		return fmt.Errorf("start blob resolver: %w", err)
+	}
+	defer resolver.Close()
+
+	checkpointInterval := cfg.BatchSize
+	if checkpointInterval <= 0 {
+		checkpointInterval = 1000
 	}
 
 	startTime := time.Now()
+	lastCheckpoint := time.Now()
+	var lastSHA string
 
 	for {
 		select {
@@ -184,228 +170,99 @@ func processCommits(
 		default:
 		}
 
-		commits, err := git.ListCommits(ctx, repo, branch, processedCount, batchSize, commandTimeout, firstParent)
+		commit, err := streamer.Next()
 		if err != nil {
+			return fmt.Errorf("stream commit: %w", err)
+		}
+		if commit == nil {
+			break
+		}
+
+		sizeMap, err := resolver.Resolve(commit.Raw)
+		if err != nil {
+			log.Printf("warning: blob sizes failed for %s: %v", commit.Meta.SHA, err)
+			sizeMap = map[string]int64{}
+		}
+
+		if err := emitCommit(writer, commit, sizeMap, devCache); err != nil {
 			return err
 		}
-		if len(commits) == 0 {
-			elapsed := time.Since(startTime)
-			log.Printf("done; processed %d commits in %s", processedCount, elapsed.Round(time.Millisecond))
-			return nil
-		}
 
-		batchStart := time.Now()
-		if err := processBatch(ctx, repo, commits, batchSize, commandTimeout, writer, devCache, policy, includeMessages); err != nil {
-			return err
-		}
+		processedCount++
+		lastSHA = commit.Meta.SHA
 
-		if err := writer.Flush(); err != nil {
-			return fmt.Errorf("flush output: %w", err)
-		}
-
-		processedCount += len(commits)
-		lastProcessedSHA = commits[len(commits)-1]
-
-		batchElapsed := time.Since(batchStart).Seconds()
-		rate := float64(len(commits)) / batchElapsed
-		log.Printf("progress: %d commits processed (%.0f commits/s)", processedCount, rate)
-		newState := State{LastProcessedSHA: lastProcessedSHA, CommitOffset: processedCount}
-		data, err := json.Marshal(newState)
-		if err != nil {
-			log.Printf("failed to encode state at offset %d: %v", processedCount, err)
-		} else if err := os.WriteFile(stateFile, data, 0o644); err != nil {
-			log.Printf("failed to update state at offset %d: %v", processedCount, err)
-		}
-
-		if len(commits) < batchSize {
-			elapsed := time.Since(startTime)
-			log.Printf("done; processed %d commits in %s", processedCount, elapsed.Round(time.Millisecond))
-			return nil
-		}
-	}
-}
-
-func processBatch(
-	ctx context.Context,
-	repo string,
-	commits []string,
-	batchSize int,
-	commandTimeout time.Duration,
-	writer *bufio.Writer,
-	devCache map[string]struct{},
-	policy git.DiscardPolicy,
-	includeMessages bool,
-) error {
-	type workItem struct {
-		index int
-		sha   string
-	}
-
-	type commitResult struct {
-		index   int
-		sha     string
-		entries []interface{}
-		devs    []devCandidate
-		err     error
-	}
-
-	workCh := make(chan workItem)
-	resultCh := make(chan commitResult)
-
-	resultLimit := batchSize
-	if resultLimit < 1 {
-		resultLimit = 1
-	}
-	inFlight := make(chan struct{}, resultLimit)
-
-	numWorkers := runtime.NumCPU()
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
-
-	var workerWG sync.WaitGroup
-	workerWG.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
-		go func() {
-			defer workerWG.Done()
-			for work := range workCh {
-				res, err := handleCommit(ctx, repo, work.sha, commandTimeout, policy, includeMessages)
-				if err != nil {
-					resultCh <- commitResult{index: work.index, sha: work.sha, err: err}
-					continue
-				}
-				resultCh <- commitResult{index: work.index, sha: work.sha, entries: res.entries, devs: res.devs}
+		if processedCount%checkpointInterval == 0 {
+			if err := writer.Flush(); err != nil {
+				return fmt.Errorf("flush output: %w", err)
 			}
-		}()
-	}
+			saveState(cfg.StateFile, lastSHA, processedCount)
 
-	go func() {
-		defer close(workCh)
-		for i, sha := range commits {
-			select {
-			case <-ctx.Done():
-				return
-			case inFlight <- struct{}{}:
-			}
-
-			select {
-			case <-ctx.Done():
-				<-inFlight
-				return
-			case workCh <- workItem{index: i, sha: sha}:
-			}
-		}
-	}()
-
-	go func() {
-		workerWG.Wait()
-		close(resultCh)
-	}()
-
-	nextIndex := 0
-	pending := make(map[int]commitResult)
-
-	for res := range resultCh {
-		if ctx.Err() != nil {
-			<-inFlight
-			continue
-		}
-
-		pending[res.index] = res
-		for {
-			nextRes, ok := pending[nextIndex]
-			if !ok {
-				break
-			}
-
-			if nextRes.err != nil {
-				log.Printf("error processing commit %s: %v", nextRes.sha, nextRes.err)
-			} else {
-				for _, entry := range nextRes.entries {
-					if err := writeJSON(writer, entry); err != nil {
-						<-inFlight
-						return err
-					}
-				}
-				for _, dev := range nextRes.devs {
-					emitDev(writer, devCache, dev.name, dev.email)
-				}
-			}
-
-			delete(pending, nextIndex)
-			nextIndex++
-			<-inFlight
+			elapsed := time.Since(lastCheckpoint).Seconds()
+			rate := float64(checkpointInterval) / elapsed
+			log.Printf("progress: %d commits processed (%.0f commits/s)", processedCount, rate)
+			lastCheckpoint = time.Now()
 		}
 	}
 
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush output: %w", err)
 	}
+
+	if lastSHA != "" {
+		saveState(cfg.StateFile, lastSHA, processedCount)
+	}
+
+	elapsed := time.Since(startTime)
+	log.Printf("done; processed %d commits in %s", processedCount-initialState.CommitOffset, elapsed.Round(time.Millisecond))
 
 	return nil
 }
 
-func handleCommit(ctx context.Context, repo, sha string, commandTimeout time.Duration, policy git.DiscardPolicy, includeMessages bool) (commitPayload, error) {
-	meta, err := git.ReadCommitMetadata(ctx, repo, sha, commandTimeout, includeMessages)
-	if err != nil {
-		return commitPayload{}, err
-	}
-
-	numstats, totals, err := git.ReadNumstat(ctx, repo, sha, commandTimeout, policy)
-	if err != nil {
-		return commitPayload{}, err
-	}
-
-	rawEntries, err := git.ReadRawChanges(ctx, repo, sha, commandTimeout, policy)
-	if err != nil {
-		return commitPayload{}, err
-	}
-
-	sizeMap, err := git.BlobSizes(ctx, repo, rawEntries, commandTimeout, policy)
-	if err != nil {
-		return commitPayload{}, err
-	}
-
-	commit := model.CommitInfo{
+func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[string]int64, devCache map[string]struct{}) error {
+	c := model.CommitInfo{
 		Type:           model.CommitType,
-		SHA:            meta.SHA,
-		Tree:           meta.Tree,
-		Parents:        meta.Parents,
-		AuthorName:     meta.AuthorName,
-		AuthorEmail:    meta.AuthorEmail,
-		AuthorDate:     meta.AuthorDate,
-		CommitterName:  meta.CommitterName,
-		CommitterEmail: meta.CommitterEmail,
-		CommitterDate:  meta.CommitterDate,
-		Message:        meta.Message,
-		Additions:      totals.Additions,
-		Deletions:      totals.Deletions,
-		FilesChanged:   len(rawEntries),
+		SHA:            commit.Meta.SHA,
+		Tree:           commit.Meta.Tree,
+		Parents:        commit.Meta.Parents,
+		AuthorName:     commit.Meta.AuthorName,
+		AuthorEmail:    commit.Meta.AuthorEmail,
+		AuthorDate:     commit.Meta.AuthorDate,
+		CommitterName:  commit.Meta.CommitterName,
+		CommitterEmail: commit.Meta.CommitterEmail,
+		CommitterDate:  commit.Meta.CommitterDate,
+		Message:        commit.Meta.Message,
+		Additions:      commit.Totals.Additions,
+		Deletions:      commit.Totals.Deletions,
+		FilesChanged:   len(commit.Raw),
 	}
 
-	entries := []interface{}{commit}
+	if err := writeJSON(writer, c); err != nil {
+		return err
+	}
 
-	for _, p := range meta.Parents {
-		entries = append(entries, model.CommitParentInfo{
+	for _, p := range commit.Meta.Parents {
+		if err := writeJSON(writer, model.CommitParentInfo{
 			Type:      model.CommitParentType,
-			SHA:       sha,
+			SHA:       commit.Meta.SHA,
 			ParentSHA: p,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 
-	for _, entry := range rawEntries {
+	for _, entry := range commit.Raw {
 		var additions, deletions int64
-		if stats, ok := numstats[entry.PathNew]; ok {
+		if stats, ok := commit.Numstats[entry.PathNew]; ok {
 			additions = stats.Additions
 			deletions = stats.Deletions
-		} else if stats, ok := numstats[entry.PathOld]; ok {
+		} else if stats, ok := commit.Numstats[entry.PathOld]; ok {
 			additions = stats.Additions
 			deletions = stats.Deletions
 		}
 
-		entries = append(entries, model.CommitFileInfo{
+		if err := writeJSON(writer, model.CommitFileInfo{
 			Type:         model.CommitFileType,
-			Commit:       sha,
+			Commit:       commit.Meta.SHA,
 			PathCurrent:  entry.PathNew,
 			PathPrevious: entry.PathOld,
 			Status:       entry.Status,
@@ -415,15 +272,27 @@ func handleCommit(ctx context.Context, repo, sha string, commandTimeout time.Dur
 			NewSize:      sizeMap[entry.NewHash],
 			Additions:    additions,
 			Deletions:    deletions,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 
-	devs := []devCandidate{
-		{name: meta.AuthorName, email: meta.AuthorEmail},
-		{name: meta.CommitterName, email: meta.CommitterEmail},
-	}
+	emitDev(writer, devCache, commit.Meta.AuthorName, commit.Meta.AuthorEmail)
+	emitDev(writer, devCache, commit.Meta.CommitterName, commit.Meta.CommitterEmail)
 
-	return commitPayload{entries: entries, devs: devs}, nil
+	return nil
+}
+
+func saveState(stateFile, sha string, offset int) {
+	state := State{LastProcessedSHA: sha, CommitOffset: offset}
+	data, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("failed to encode state at offset %d: %v", offset, err)
+		return
+	}
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		log.Printf("failed to write state at offset %d: %v", offset, err)
+	}
 }
 
 func emitDev(writer *bufio.Writer, devCache map[string]struct{}, name, email string) {

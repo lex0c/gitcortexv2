@@ -58,7 +58,7 @@ func extractCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cfg.Repo, "repo", ".", "Path to the Git repository")
-	cmd.Flags().IntVar(&cfg.BatchSize, "batch-size", 1000, "Number of commits to process per batch")
+	cmd.Flags().IntVar(&cfg.BatchSize, "batch-size", 1000, "Checkpoint interval: flush output and save state every N commits")
 	cmd.Flags().StringVar(&cfg.Output, "output", "git_data.jsonl", "Output JSONL file path")
 	cmd.Flags().StringVar(&cfg.StateFile, "state-file", "git_state", "File to persist worker state")
 	cmd.Flags().IntVar(&cfg.StartOffset, "start-offset", -1, "Number of commits to skip before processing")
