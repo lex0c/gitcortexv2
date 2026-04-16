@@ -74,6 +74,7 @@ func extractCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.CommandTimeout, "command-timeout", extract.DefaultCommandTimeout, "Maximum duration for git commands")
 	cmd.Flags().BoolVar(&cfg.FirstParent, "first-parent", false, "Restrict to first-parent chain")
 	cmd.Flags().BoolVar(&cfg.Mailmap, "mailmap", false, "Use .mailmap to normalize author/committer identities")
+	cmd.Flags().StringSliceVar(&cfg.IgnorePatterns, "ignore", nil, "Glob patterns to exclude files (e.g. package-lock.json, *.min.js)")
 
 	return cmd
 }

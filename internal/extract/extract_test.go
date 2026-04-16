@@ -101,3 +101,31 @@ func TestLoadStateGarbage(t *testing.T) {
 		t.Error("expected error for garbage state file")
 	}
 }
+
+func TestShouldIgnore(t *testing.T) {
+	tests := []struct {
+		path     string
+		patterns []string
+		want     bool
+	}{
+		{"package-lock.json", []string{"package-lock.json"}, true},
+		{"src/main.go", []string{"package-lock.json"}, false},
+		{"dist/app.min.js", []string{"*.min.js"}, true},
+		{"src/app.js", []string{"*.min.js"}, false},
+		{"vendor/lib/foo.go", []string{"vendor/*"}, false},  // only matches basename or full path
+		{"go.sum", []string{"go.sum", "go.mod"}, true},
+		{"go.mod", []string{"go.sum", "go.mod"}, true},
+		{"readme.md", []string{"*.md"}, true},
+		{"docs/guide.md", []string{"*.md"}, true},  // basename match
+		{"src/main.go", nil, false},
+		{"src/main.go", []string{}, false},
+		{"", []string{"*.go"}, false},
+	}
+
+	for _, tt := range tests {
+		got := shouldIgnore(tt.path, tt.patterns)
+		if got != tt.want {
+			t.Errorf("shouldIgnore(%q, %v) = %v, want %v", tt.path, tt.patterns, got, tt.want)
+		}
+	}
+}

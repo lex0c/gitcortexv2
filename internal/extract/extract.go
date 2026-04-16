@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type Config struct {
 	CommandTimeout   time.Duration
 	FirstParent      bool
 	Mailmap          bool
+	IgnorePatterns   []string
 }
 
 type State struct {
@@ -188,7 +190,7 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 			sizeMap = map[string]int64{}
 		}
 
-		if err := emitCommit(writer, commit, sizeMap, devCache); err != nil {
+		if err := emitCommit(writer, commit, sizeMap, devCache, cfg.IgnorePatterns); err != nil {
 			return err
 		}
 
@@ -222,7 +224,35 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 	return nil
 }
 
-func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[string]int64, devCache map[string]struct{}) error {
+func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[string]int64, devCache map[string]struct{}, ignorePatterns []string) error {
+	// Filter files and recalculate totals
+	var totalAdd, totalDel int64
+	var filesCount int
+	var filteredRaw []git.RawEntry
+
+	for _, entry := range commit.Raw {
+		path := entry.PathNew
+		if path == "" {
+			path = entry.PathOld
+		}
+		if shouldIgnore(path, ignorePatterns) {
+			continue
+		}
+		filteredRaw = append(filteredRaw, entry)
+
+		var add, del int64
+		if stats, ok := commit.Numstats[entry.PathNew]; ok {
+			add = stats.Additions
+			del = stats.Deletions
+		} else if stats, ok := commit.Numstats[entry.PathOld]; ok {
+			add = stats.Additions
+			del = stats.Deletions
+		}
+		totalAdd += add
+		totalDel += del
+		filesCount++
+	}
+
 	c := model.CommitInfo{
 		Type:           model.CommitType,
 		SHA:            commit.Meta.SHA,
@@ -235,9 +265,9 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 		CommitterEmail: commit.Meta.CommitterEmail,
 		CommitterDate:  commit.Meta.CommitterDate,
 		Message:        commit.Meta.Message,
-		Additions:      commit.Totals.Additions,
-		Deletions:      commit.Totals.Deletions,
-		FilesChanged:   len(commit.Raw),
+		Additions:      totalAdd,
+		Deletions:      totalDel,
+		FilesChanged:   filesCount,
 	}
 
 	if err := writeJSON(writer, c); err != nil {
@@ -254,7 +284,7 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 		}
 	}
 
-	for _, entry := range commit.Raw {
+	for _, entry := range filteredRaw {
 		var additions, deletions int64
 		if stats, ok := commit.Numstats[entry.PathNew]; ok {
 			additions = stats.Additions
@@ -348,6 +378,21 @@ func loadDevEmails(path string) (map[string]struct{}, error) {
 	}
 
 	return cache, scanner.Err()
+}
+
+func shouldIgnore(path string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	for _, pattern := range patterns {
+		if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(pattern, path); matched {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(writer *bufio.Writer, v interface{}) error {
