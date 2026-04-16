@@ -5,32 +5,112 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"time"
 
 	"gitcortex/internal/model"
 )
 
-type Dataset struct {
-	Commits []model.CommitInfo
-	Files   []model.CommitFileInfo
-	Parents []model.CommitParentInfo
-	Devs    []model.DevInfo
+type commitEntry struct {
+	email string
+	date  time.Time
+	add   int64
+	del   int64
+	files int
 }
 
-func LoadJSONL(path string) (*Dataset, error) {
+type fileEntry struct {
+	commits     int
+	additions   int64
+	deletions   int64
+	devLines    map[string]int64
+	recentChurn float64
+	lastChange  time.Time
+}
+
+type filePair struct{ a, b string }
+
+type Dataset struct {
+	// Summary
+	CommitCount       int
+	DevCount          int
+	UniqueFileCount   int
+	TotalAdditions    int64
+	TotalDeletions    int64
+	TotalFilesChanged int64
+	MergeCount        int
+	Earliest          time.Time
+	Latest            time.Time
+
+	// Indexed data (lean)
+	commits      map[string]*commitEntry
+	parentCounts map[string]int
+	contributors map[string]*ContributorStat
+	files        map[string]*fileEntry
+	workGrid     [7][24]int
+
+	// Coupling (pre-aggregated during load)
+	couplingPairs       map[filePair]int
+	couplingFileChanges map[string]int
+}
+
+type LoadOptions struct {
+	From, To     string
+	HalfLifeDays int
+	CoupMaxFiles int
+}
+
+func LoadJSONL(path string, opts ...LoadOptions) (*Dataset, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
-	return readJSONL(f)
+	opt := LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50}
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	return streamLoad(f, opt)
 }
 
-func readJSONL(r io.Reader) (*Dataset, error) {
-	var ds Dataset
+func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
+	ds := &Dataset{
+		commits:             make(map[string]*commitEntry),
+		parentCounts:        make(map[string]int),
+		contributors:        make(map[string]*ContributorStat),
+		files:               make(map[string]*fileEntry),
+		couplingPairs:       make(map[filePair]int),
+		couplingFileChanges: make(map[string]int),
+	}
+
 	devSeen := make(map[string]struct{})
+	uniqueFiles := make(map[string]struct{})
+	commitInRange := make(map[string]bool)
+
+	var fromTime, toTime time.Time
+	if opt.From != "" {
+		fromTime = parseDate(opt.From + "T00:00:00Z")
+	}
+	if opt.To != "" {
+		toTime = parseDate(opt.To + "T23:59:59Z")
+	}
+	hasFilter := !fromTime.IsZero() || !toTime.IsZero()
+
+	now := time.Now()
+	lambda := math.Ln2 / float64(opt.HalfLifeDays)
+
+	// Coupling streaming state
+	var coupCurrentSHA string
+	var coupCurrentFiles []string
+
+	dayIndex := map[time.Weekday]int{
+		time.Monday: 0, time.Tuesday: 1, time.Wednesday: 2,
+		time.Thursday: 3, time.Friday: 4, time.Saturday: 5, time.Sunday: 6,
+	}
+
 	scanner := bufio.NewScanner(r)
 	buf := make([]byte, 0, 1<<20)
 	scanner.Buffer(buf, 10<<20)
@@ -56,21 +136,117 @@ func readJSONL(r io.Reader) (*Dataset, error) {
 			if err := json.Unmarshal(line, &c); err != nil {
 				return nil, fmt.Errorf("line %d: parse commit: %w", lineNum, err)
 			}
-			ds.Commits = append(ds.Commits, c)
 
-		case model.CommitFileType:
-			var cf model.CommitFileInfo
-			if err := json.Unmarshal(line, &cf); err != nil {
-				return nil, fmt.Errorf("line %d: parse commit_file: %w", lineNum, err)
+			t := parseDate(c.AuthorDate)
+
+			if hasFilter {
+				inRange := true
+				if !fromTime.IsZero() && !t.IsZero() && t.Before(fromTime) {
+					inRange = false
+				}
+				if !toTime.IsZero() && !t.IsZero() && t.After(toTime) {
+					inRange = false
+				}
+				commitInRange[c.SHA] = inRange
+				if !inRange {
+					continue
+				}
 			}
-			ds.Files = append(ds.Files, cf)
+
+			ds.CommitCount++
+			ds.TotalAdditions += c.Additions
+			ds.TotalDeletions += c.Deletions
+			ds.TotalFilesChanged += int64(c.FilesChanged)
+
+			ds.commits[c.SHA] = &commitEntry{
+				email: c.AuthorEmail,
+				date:  t,
+				add:   c.Additions,
+				del:   c.Deletions,
+				files: c.FilesChanged,
+			}
+
+			// Contributors
+			cs, ok := ds.contributors[c.AuthorEmail]
+			if !ok {
+				cs = &ContributorStat{Name: c.AuthorName, Email: c.AuthorEmail}
+				ds.contributors[c.AuthorEmail] = cs
+			}
+			cs.Commits++
+			cs.Additions += c.Additions
+			cs.Deletions += c.Deletions
+
+			// Dates
+			if !t.IsZero() {
+				if ds.Earliest.IsZero() || t.Before(ds.Earliest) {
+					ds.Earliest = t
+				}
+				if ds.Latest.IsZero() || t.After(ds.Latest) {
+					ds.Latest = t
+				}
+				ds.workGrid[dayIndex[t.Weekday()]][t.Hour()]++
+			}
 
 		case model.CommitParentType:
 			var cp model.CommitParentInfo
 			if err := json.Unmarshal(line, &cp); err != nil {
-				return nil, fmt.Errorf("line %d: parse commit_parent: %w", lineNum, err)
+				return nil, fmt.Errorf("line %d: parse parent: %w", lineNum, err)
 			}
-			ds.Parents = append(ds.Parents, cp)
+			if hasFilter && !commitInRange[cp.SHA] {
+				continue
+			}
+			ds.parentCounts[cp.SHA]++
+
+		case model.CommitFileType:
+			var cf model.CommitFileInfo
+			if err := json.Unmarshal(line, &cf); err != nil {
+				return nil, fmt.Errorf("line %d: parse file: %w", lineNum, err)
+			}
+			if hasFilter && !commitInRange[cf.Commit] {
+				continue
+			}
+
+			path := cf.PathCurrent
+			if path == "" {
+				path = cf.PathPrevious
+			}
+			if path == "" {
+				continue
+			}
+
+			uniqueFiles[path] = struct{}{}
+
+			// File aggregation (hotspots + busfactor + churn-risk)
+			fe, ok := ds.files[path]
+			if !ok {
+				fe = &fileEntry{devLines: make(map[string]int64)}
+				ds.files[path] = fe
+			}
+			fe.commits++
+			fe.additions += cf.Additions
+			fe.deletions += cf.Deletions
+
+			cm := ds.commits[cf.Commit]
+			if cm != nil {
+				fe.devLines[cm.email] += cf.Additions + cf.Deletions
+
+				if !cm.date.IsZero() {
+					days := now.Sub(cm.date).Hours() / 24
+					weight := math.Exp(-lambda * days)
+					fe.recentChurn += float64(cf.Additions+cf.Deletions) * weight
+					if cm.date.After(fe.lastChange) {
+						fe.lastChange = cm.date
+					}
+				}
+			}
+
+			// Coupling: streaming pair computation
+			if cf.Commit != coupCurrentSHA {
+				flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+				coupCurrentSHA = cf.Commit
+				coupCurrentFiles = coupCurrentFiles[:0]
+			}
+			coupCurrentFiles = append(coupCurrentFiles, path)
 
 		case model.DevType:
 			var d model.DevInfo
@@ -79,7 +255,7 @@ func readJSONL(r io.Reader) (*Dataset, error) {
 			}
 			if _, seen := devSeen[d.DevID]; !seen {
 				devSeen[d.DevID] = struct{}{}
-				ds.Devs = append(ds.Devs, d)
+				ds.DevCount++
 			}
 		}
 	}
@@ -88,7 +264,44 @@ func readJSONL(r io.Reader) (*Dataset, error) {
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
-	return &ds, nil
+	// Flush last coupling batch
+	flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+
+	// Finalize
+	ds.UniqueFileCount = len(uniqueFiles)
+	for sha := range ds.parentCounts {
+		if ds.parentCounts[sha] > 1 {
+			ds.MergeCount++
+		}
+	}
+
+	return ds, nil
+}
+
+func flushCoupling(ds *Dataset, files []string, maxFiles int) {
+	if len(files) < 2 || len(files) > maxFiles {
+		return
+	}
+
+	seen := make(map[string]bool, len(files))
+	unique := make([]string, 0, len(files))
+	for _, f := range files {
+		if !seen[f] {
+			seen[f] = true
+			unique = append(unique, f)
+			ds.couplingFileChanges[f]++
+		}
+	}
+
+	for i := 0; i < len(unique); i++ {
+		for j := i + 1; j < len(unique); j++ {
+			a, b := unique[i], unique[j]
+			if a > b {
+				a, b = b, a
+			}
+			ds.couplingPairs[filePair{a, b}]++
+		}
+	}
 }
 
 func parseDate(s string) time.Time {

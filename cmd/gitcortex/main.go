@@ -133,13 +133,16 @@ func statsCmd() *cobra.Command {
 				return err
 			}
 
-			ds, err := stats.LoadJSONL(sf.input)
+			ds, err := stats.LoadJSONL(sf.input, stats.LoadOptions{
+				HalfLifeDays: sf.churnHalfLife,
+				CoupMaxFiles: sf.couplingMaxFiles,
+			})
 			if err != nil {
 				return err
 			}
 
 			fmt.Fprintf(os.Stderr, "Loaded %d commits, %d files, %d devs\n\n",
-				len(ds.Commits), len(ds.Files), len(ds.Devs))
+				ds.CommitCount, ds.UniqueFileCount, ds.DevCount)
 
 			return renderStats(ds, &sf)
 		},
@@ -274,23 +277,26 @@ func diffCmd() *cobra.Command {
 				return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", format)
 			}
 
-			ds, err := stats.LoadJSONL(input)
+			optsA := stats.LoadOptions{From: from, To: to, HalfLifeDays: 90, CoupMaxFiles: 50}
+			periodA, err := stats.LoadJSONL(input, optsA)
 			if err != nil {
 				return err
 			}
-
-			periodA := stats.FilterByDateRange(ds, from, to)
 			labelA := fmt.Sprintf("%s to %s", from, to)
 
 			fmt.Fprintf(os.Stderr, "Period A (%s): %d commits, %d files\n",
-				labelA, len(periodA.Commits), len(periodA.Files))
+				labelA, periodA.CommitCount, periodA.UniqueFileCount)
 
 			if vsFrom != "" && vsTo != "" {
-				periodB := stats.FilterByDateRange(ds, vsFrom, vsTo)
+				optsB := stats.LoadOptions{From: vsFrom, To: vsTo, HalfLifeDays: 90, CoupMaxFiles: 50}
+				periodB, err := stats.LoadJSONL(input, optsB)
+				if err != nil {
+					return err
+				}
 				labelB := fmt.Sprintf("%s to %s", vsFrom, vsTo)
 
 				fmt.Fprintf(os.Stderr, "Period B (%s): %d commits, %d files\n\n",
-					labelB, len(periodB.Commits), len(periodB.Files))
+					labelB, periodB.CommitCount, periodB.UniqueFileCount)
 
 				return renderDiff(periodA, periodB, labelA, labelB, format, topN)
 			}
