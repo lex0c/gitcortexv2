@@ -82,7 +82,7 @@ var validGranularities = map[string]bool{"day": true, "week": true, "month": tru
 var validStats = map[string]bool{
 	"summary": true, "contributors": true, "ranking": true, "hotspots": true,
 	"activity": true, "busfactor": true, "coupling": true,
-	"churn-risk": true, "working-patterns": true, "dev-network": true,
+	"churn-risk": true, "working-patterns": true, "dev-network": true, "profile": true,
 }
 
 type statsFlags struct {
@@ -95,6 +95,7 @@ type statsFlags struct {
 	couplingMinChanges int
 	churnHalfLife      int
 	networkMinFiles    int
+	email              string
 }
 
 func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
@@ -107,6 +108,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
 	cmd.Flags().IntVar(&sf.networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
+	cmd.Flags().StringVar(&sf.email, "email", "", "Filter by developer email (for profile stat)")
 }
 
 func validateStatsFlags(sf *statsFlags) error {
@@ -117,7 +119,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !validStats[sf.stat] {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile", sf.stat)
 	}
 	return nil
 }
@@ -220,6 +222,16 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if sf.stat == "profile" {
+		label := "All Developers"
+		if sf.email != "" {
+			label = sf.email
+		}
+		fmt.Fprintf(os.Stderr, "\n=== Profile: %s ===\n", label)
+		if err := f.PrintProfiles(stats.DevProfiles(ds, sf.email)); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -257,6 +269,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "dev-network" {
 		report["dev_network"] = stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)
+	}
+	if sf.stat == "profile" {
+		report["profiles"] = stats.DevProfiles(ds, sf.email)
 	}
 
 	return f.PrintReport(report)

@@ -311,6 +311,67 @@ func (f *Formatter) PrintDevNetwork(edges []DevEdge) error {
 	}
 }
 
+func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(profiles)
+	case "csv":
+		rows := make([][]string, len(profiles))
+		for i, p := range profiles {
+			rows[i] = []string{
+				p.Name, p.Email,
+				fmt.Sprintf("%.1f", p.Score),
+				fmt.Sprintf("%d", p.Commits),
+				fmt.Sprintf("%d", p.LinesChanged),
+				fmt.Sprintf("%d", p.FilesTouched),
+				fmt.Sprintf("%d", p.ActiveDays),
+				fmt.Sprintf("%.1f", p.WeekendPct),
+				p.FirstDate, p.LastDate,
+			}
+		}
+		return f.writeCSV([]string{"name", "email", "score", "commits", "lines_changed", "files_touched", "active_days", "weekend_pct", "first_date", "last_date"}, rows)
+	default:
+		for i, p := range profiles {
+			if i > 0 {
+				fmt.Fprintln(f.w)
+			}
+			fmt.Fprintf(f.w, "%s <%s>\n", p.Name, p.Email)
+			fmt.Fprintf(f.w, "  Score: %.1f | Commits: %d | Lines: %d | Files: %d | Active: %d days | Weekend: %.1f%%\n",
+				p.Score, p.Commits, p.LinesChanged, p.FilesTouched, p.ActiveDays, p.WeekendPct)
+			fmt.Fprintf(f.w, "  Period: %s to %s\n", p.FirstDate, p.LastDate)
+
+			if len(p.TopFiles) > 0 {
+				fmt.Fprintln(f.w, "  Top files:")
+				for _, tf := range p.TopFiles {
+					fmt.Fprintf(f.w, "    %-50s %3d commits  %6d churn\n", tf.Path, tf.Commits, tf.Churn)
+				}
+			}
+
+			if len(p.MonthlyActivity) > 0 {
+				fmt.Fprintln(f.w, "  Activity:")
+				maxCommits := 0
+				for _, b := range p.MonthlyActivity {
+					if b.Commits > maxCommits {
+						maxCommits = b.Commits
+					}
+				}
+				for _, b := range p.MonthlyActivity {
+					barLen := 0
+					if maxCommits > 0 {
+						barLen = b.Commits * 30 / maxCommits
+					}
+					bar := ""
+					for j := 0; j < barLen; j++ {
+						bar += "#"
+					}
+					fmt.Fprintf(f.w, "    %s  %-30s %d\n", b.Period, bar, b.Commits)
+				}
+			}
+		}
+		return nil
+	}
+}
+
 func (f *Formatter) PrintReport(v interface{}) error {
 	return f.writeJSON(v)
 }

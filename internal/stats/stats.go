@@ -432,6 +432,155 @@ func WorkingPatterns(ds *Dataset) []WorkingPattern {
 	return results
 }
 
+// --- Dev Profile ---
+
+type DevProfile struct {
+	Name            string
+	Email           string
+	Score           float64
+	Commits         int
+	Additions       int64
+	Deletions       int64
+	LinesChanged    int64
+	FilesTouched    int
+	ActiveDays      int
+	FirstDate       string
+	LastDate        string
+	TopFiles        []DevFileContrib
+	MonthlyActivity []ActivityBucket
+	WorkGrid        [7][24]int
+	WeekendPct      float64
+}
+
+type DevFileContrib struct {
+	Path    string
+	Commits int
+	Churn   int64
+}
+
+// DevProfiles returns a profile for each developer (or a specific one if filterEmail is set).
+func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
+	// Per-dev file contributions: count commits per file from devLines
+	type fileAcc struct {
+		commits int
+		churn   int64
+	}
+	devFiles := make(map[string]map[string]*fileAcc)
+	for path, fe := range ds.files {
+		for email, lines := range fe.devLines {
+			if filterEmail != "" && email != filterEmail {
+				continue
+			}
+			if devFiles[email] == nil {
+				devFiles[email] = make(map[string]*fileAcc)
+			}
+			devFiles[email][path] = &fileAcc{commits: fe.commits, churn: lines}
+		}
+	}
+
+	// Per-dev work grid + monthly activity
+	devGrid := make(map[string]*[7][24]int)
+	devMonthly := make(map[string]map[string]*ActivityBucket)
+	dayIdx := [7]int{6, 0, 1, 2, 3, 4, 5} // Sunday=6, Monday=0, ...
+
+	for _, cm := range ds.commits {
+		if filterEmail != "" && cm.email != filterEmail {
+			continue
+		}
+		if cm.date.IsZero() {
+			continue
+		}
+
+		if devGrid[cm.email] == nil {
+			devGrid[cm.email] = &[7][24]int{}
+		}
+		di := dayIdx[cm.date.Weekday()]
+		devGrid[cm.email][di][cm.date.Hour()]++
+
+		month := cm.date.Format("2006-01")
+		if devMonthly[cm.email] == nil {
+			devMonthly[cm.email] = make(map[string]*ActivityBucket)
+		}
+		b, ok := devMonthly[cm.email][month]
+		if !ok {
+			b = &ActivityBucket{Period: month}
+			devMonthly[cm.email][month] = b
+		}
+		b.Commits++
+		b.Additions += cm.add
+		b.Deletions += cm.del
+	}
+
+	scoreMap := make(map[string]float64)
+	for _, r := range ContributorRanking(ds, 0) {
+		scoreMap[r.Email] = r.Score
+	}
+
+	var profiles []DevProfile
+	for email, cs := range ds.contributors {
+		if filterEmail != "" && email != filterEmail {
+			continue
+		}
+
+		var topFiles []DevFileContrib
+		if files, ok := devFiles[email]; ok {
+			for path, fa := range files {
+				topFiles = append(topFiles, DevFileContrib{Path: path, Commits: fa.commits, Churn: fa.churn})
+			}
+			sort.Slice(topFiles, func(i, j int) bool {
+				return topFiles[i].Churn > topFiles[j].Churn
+			})
+			if len(topFiles) > 10 {
+				topFiles = topFiles[:10]
+			}
+		}
+
+		var monthly []ActivityBucket
+		if months, ok := devMonthly[email]; ok {
+			var order []string
+			for k := range months {
+				order = append(order, k)
+			}
+			sort.Strings(order)
+			for _, k := range order {
+				monthly = append(monthly, *months[k])
+			}
+		}
+
+		var grid [7][24]int
+		var total, weekend int
+		if g, ok := devGrid[email]; ok {
+			grid = *g
+			for d := 0; d < 7; d++ {
+				for h := 0; h < 24; h++ {
+					total += grid[d][h]
+					if d == 5 || d == 6 {
+						weekend += grid[d][h]
+					}
+				}
+			}
+		}
+		wpct := 0.0
+		if total > 0 {
+			wpct = math.Round(float64(weekend)/float64(total)*1000) / 10
+		}
+
+		profiles = append(profiles, DevProfile{
+			Name: cs.Name, Email: cs.Email, Score: scoreMap[email],
+			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
+			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
+			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
+			TopFiles: topFiles, MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,
+		})
+	}
+
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Score > profiles[j].Score
+	})
+
+	return profiles
+}
+
 func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 	type devPair struct{ a, b string }
 	pairFiles := make(map[devPair]int)
