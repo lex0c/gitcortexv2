@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ func main() {
 	rootCmd.AddCommand(extractCmd())
 	rootCmd.AddCommand(statsCmd())
 	rootCmd.AddCommand(diffCmd())
+	rootCmd.AddCommand(ciCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -385,4 +387,134 @@ func renderDiff(a, b *stats.Dataset, labelA, labelB, format string, topN int) er
 	}
 	fmt.Fprintf(os.Stderr, "\n=== Top %d Hotspots: %s ===\n", topN, labelB)
 	return f.PrintHotspots(stats.FileHotspots(b, topN))
+}
+
+// --- CI ---
+
+var validCIFormats = map[string]bool{"text": true, "github-actions": true, "gitlab": true, "json": true}
+
+func ciCmd() *cobra.Command {
+	var (
+		input          string
+		format         string
+		bfThreshold    int
+		churnThreshold float64
+		halfLife       int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "ci",
+		Short: "Run quality gates for CI pipelines",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !validCIFormats[format] {
+				return fmt.Errorf("invalid --format %q; must be one of: text, github-actions, gitlab, json", format)
+			}
+
+			ds, err := stats.LoadJSONL(input, stats.LoadOptions{HalfLifeDays: halfLife, CoupMaxFiles: 50})
+			if err != nil {
+				return err
+			}
+
+			var violations []ciViolation
+
+			if bfThreshold > 0 {
+				for _, bf := range stats.BusFactor(ds, 0) {
+					if bf.BusFactor <= bfThreshold {
+						violations = append(violations, ciViolation{
+							File:    bf.Path,
+							Rule:    "busfactor",
+							Message: fmt.Sprintf("Bus factor %d (only %s)", bf.BusFactor, joinDevs(bf.TopDevs)),
+							Level:   "warning",
+						})
+					}
+				}
+			}
+
+			if churnThreshold > 0 {
+				for _, cr := range stats.ChurnRisk(ds, 0, halfLife) {
+					if cr.RiskScore >= churnThreshold {
+						violations = append(violations, ciViolation{
+							File:    cr.Path,
+							Rule:    "churn-risk",
+							Message: fmt.Sprintf("Churn risk %.1f exceeds threshold %.0f", cr.RiskScore, churnThreshold),
+							Level:   "warning",
+						})
+					}
+				}
+			}
+
+			switch format {
+			case "github-actions":
+				for _, v := range violations {
+					fmt.Printf("::%s file=%s::%s\n", v.Level, v.File, v.Message)
+				}
+			case "gitlab":
+				printGitlabCodeQuality(violations)
+			case "json":
+				printCIJSON(violations)
+			default:
+				for _, v := range violations {
+					fmt.Printf("[%s] %s: %s\n", v.Level, v.File, v.Message)
+				}
+			}
+
+			if len(violations) > 0 {
+				fmt.Fprintf(os.Stderr, "\n%d violation(s) found\n", len(violations))
+				cmd.SilenceUsage = true
+				return fmt.Errorf("%d violation(s)", len(violations))
+			}
+
+			fmt.Fprintln(os.Stderr, "No violations found")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, github-actions, gitlab, json")
+	cmd.Flags().IntVar(&bfThreshold, "fail-on-busfactor", 0, "Fail if any file has bus factor <= N (0 = disabled)")
+	cmd.Flags().Float64Var(&churnThreshold, "fail-on-churn-risk", 0, "Fail if any file has churn risk >= N (0 = disabled)")
+	cmd.Flags().IntVar(&halfLife, "churn-half-life", 90, "Half-life in days for churn decay")
+
+	return cmd
+}
+
+type ciViolation struct {
+	File    string `json:"file"`
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
+	Level   string `json:"level"`
+}
+
+func joinDevs(devs []string) string {
+	if len(devs) <= 3 {
+		return fmt.Sprintf("%v", devs)
+	}
+	return fmt.Sprintf("%v +%d more", devs[:3], len(devs)-3)
+}
+
+func printGitlabCodeQuality(violations []ciViolation) {
+	type glIssue struct {
+		Description string `json:"description"`
+		Severity    string `json:"severity"`
+		Location    struct {
+			Path string `json:"path"`
+		} `json:"location"`
+	}
+
+	issues := make([]glIssue, len(violations))
+	for i, v := range violations {
+		issues[i].Description = fmt.Sprintf("[%s] %s", v.Rule, v.Message)
+		issues[i].Severity = "minor"
+		issues[i].Location.Path = v.File
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(issues)
+}
+
+func printCIJSON(violations []ciViolation) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(violations)
 }
