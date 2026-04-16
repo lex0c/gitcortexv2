@@ -30,6 +30,7 @@ func LoadJSONL(path string) (*Dataset, error) {
 
 func readJSONL(r io.Reader) (*Dataset, error) {
 	var ds Dataset
+	devSeen := make(map[string]struct{})
 	scanner := bufio.NewScanner(r)
 	buf := make([]byte, 0, 1<<20)
 	scanner.Buffer(buf, 10<<20)
@@ -76,7 +77,10 @@ func readJSONL(r io.Reader) (*Dataset, error) {
 			if err := json.Unmarshal(line, &d); err != nil {
 				return nil, fmt.Errorf("line %d: parse dev: %w", lineNum, err)
 			}
-			ds.Devs = append(ds.Devs, d)
+			if _, seen := devSeen[d.DevID]; !seen {
+				devSeen[d.DevID] = struct{}{}
+				ds.Devs = append(ds.Devs, d)
+			}
 		}
 	}
 

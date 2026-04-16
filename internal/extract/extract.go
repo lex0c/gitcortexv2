@@ -125,6 +125,12 @@ func Run(ctx context.Context, cfg Config) error {
 	defer out.Close()
 
 	devCache := make(map[string]struct{})
+	if resuming {
+		if existing, err := loadDevEmails(cfg.Output); err == nil {
+			devCache = existing
+			log.Printf("resume: loaded %d known dev emails from %s", len(devCache), cfg.Output)
+		}
+	}
 	writer := bufio.NewWriter(out)
 	defer writer.Flush()
 
@@ -169,6 +175,8 @@ func processCommits(
 		lastProcessedSHA = sha
 	}
 
+	startTime := time.Now()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,10 +189,12 @@ func processCommits(
 			return err
 		}
 		if len(commits) == 0 {
-			log.Printf("no more commits to process; processed %d commits total", processedCount)
+			elapsed := time.Since(startTime)
+			log.Printf("done; processed %d commits in %s", processedCount, elapsed.Round(time.Millisecond))
 			return nil
 		}
 
+		batchStart := time.Now()
 		if err := processBatch(ctx, repo, commits, batchSize, commandTimeout, writer, devCache, policy, includeMessages); err != nil {
 			return err
 		}
@@ -195,6 +205,10 @@ func processCommits(
 
 		processedCount += len(commits)
 		lastProcessedSHA = commits[len(commits)-1]
+
+		batchElapsed := time.Since(batchStart).Seconds()
+		rate := float64(len(commits)) / batchElapsed
+		log.Printf("progress: %d commits processed (%.0f commits/s)", processedCount, rate)
 		newState := State{LastProcessedSHA: lastProcessedSHA, CommitOffset: processedCount}
 		data, err := json.Marshal(newState)
 		if err != nil {
@@ -204,7 +218,8 @@ func processCommits(
 		}
 
 		if len(commits) < batchSize {
-			log.Printf("no more commits to process; processed %d commits total", processedCount)
+			elapsed := time.Since(startTime)
+			log.Printf("done; processed %d commits in %s", processedCount, elapsed.Round(time.Millisecond))
 			return nil
 		}
 	}
@@ -431,6 +446,35 @@ func emitDev(writer *bufio.Writer, devCache map[string]struct{}, name, email str
 	if err := writeJSON(writer, info); err != nil {
 		log.Printf("dev emit failed for %s: %v", email, err)
 	}
+}
+
+func loadDevEmails(path string) (map[string]struct{}, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cache := make(map[string]struct{})
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 1<<20)
+	scanner.Buffer(buf, 10<<20)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var peek struct {
+			Type  string `json:"type"`
+			Email string `json:"email"`
+		}
+		if err := json.Unmarshal(line, &peek); err != nil {
+			continue
+		}
+		if peek.Type == model.DevType && peek.Email != "" {
+			cache[strings.ToLower(strings.TrimSpace(peek.Email))] = struct{}{}
+		}
+	}
+
+	return cache, scanner.Err()
 }
 
 func writeJSON(writer *bufio.Writer, v interface{}) error {

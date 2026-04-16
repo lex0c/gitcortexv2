@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"gitcortex/internal/extract"
+	"gitcortex/internal/git"
 	"gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
@@ -40,6 +41,10 @@ func extractCmd() *cobra.Command {
 				return fmt.Errorf("resolve repo path: %w", err)
 			}
 			cfg.Repo = repoPath
+
+			if !cmd.Flags().Changed("branch") {
+				cfg.Branch = git.DetectDefaultBranch(repoPath)
+			}
 
 			if cfg.CommandTimeout == 0 {
 				cfg.CommandTimeout = extract.DefaultCommandTimeout

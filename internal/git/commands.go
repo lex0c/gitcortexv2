@@ -308,7 +308,7 @@ func ReadCommitMetadata(ctx context.Context, repo, sha string, commandTimeout ti
 
 	raw := strings.TrimRight(string(out), "\n\r")
 	raw = strings.TrimSuffix(raw, "\x1e")
-	parts := strings.Split(raw, "\x1f")
+	parts := strings.SplitN(raw, "\x1f", 10)
 	if len(parts) < 10 {
 		return CommitMeta{}, fmt.Errorf("unexpected commit format for %s", sha)
 	}
@@ -553,6 +553,27 @@ func BlobSizes(ctx context.Context, repo string, entries []RawEntry, commandTime
 	waited = true
 
 	return sizes, nil
+}
+
+func DetectDefaultBranch(repo string) string {
+	// Try symbolic ref from remote origin
+	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD").Output()
+	if err == nil {
+		ref := strings.TrimSpace(string(out))
+		// refs/remotes/origin/main -> main
+		if parts := strings.SplitN(ref, "refs/remotes/origin/", 2); len(parts) == 2 {
+			return parts[1]
+		}
+	}
+
+	// Fallback: check if main or master exist
+	for _, branch := range []string{"main", "master"} {
+		if err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", branch).Run(); err == nil {
+			return branch
+		}
+	}
+
+	return "HEAD"
 }
 
 func IsValidSHA(s string) bool {

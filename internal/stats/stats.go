@@ -198,16 +198,6 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 }
 
 func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
-	format := "2006-01"
-	switch granularity {
-	case "day":
-		format = "2006-01-02"
-	case "week":
-		format = "2006-W%V"
-	case "year":
-		format = "2006"
-	}
-
 	buckets := make(map[string]*ActivityBucket)
 	var order []string
 
@@ -218,11 +208,16 @@ func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 		}
 
 		var key string
-		if granularity == "week" {
+		switch granularity {
+		case "day":
+			key = t.Format("2006-01-02")
+		case "week":
 			y, w := t.ISOWeek()
 			key = fmt.Sprintf("%04d-W%02d", y, w)
-		} else {
-			key = t.Format(format)
+		case "year":
+			key = t.Format("2006")
+		default:
+			key = t.Format("2006-01")
 		}
 
 		b, ok := buckets[key]
