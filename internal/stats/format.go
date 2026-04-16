@@ -186,6 +186,101 @@ func (f *Formatter) PrintCoupling(results []CouplingResult) error {
 	}
 }
 
+func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(results)
+	case "csv":
+		rows := make([][]string, len(results))
+		for i, r := range results {
+			rows[i] = []string{
+				r.Path,
+				fmt.Sprintf("%.1f", r.RiskScore),
+				fmt.Sprintf("%.1f", r.RecentChurn),
+				fmt.Sprintf("%d", r.BusFactor),
+				fmt.Sprintf("%d", r.TotalChanges),
+				r.LastChangeDate,
+			}
+		}
+		return f.writeCSV([]string{"path", "risk_score", "recent_churn", "bus_factor", "total_changes", "last_change"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "PATH\tRISK\tRECENT CHURN\tBUS FACTOR\tTOTAL CHANGES\tLAST CHANGE\n")
+		fmt.Fprintf(tw, "----\t----\t------------\t----------\t-------------\t-----------\n")
+		for _, r := range results {
+			fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\n", r.Path, r.RiskScore, r.RecentChurn, r.BusFactor, r.TotalChanges, r.LastChangeDate)
+		}
+		return tw.Flush()
+	}
+}
+
+func (f *Formatter) PrintWorkingPatterns(patterns []WorkingPattern) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(patterns)
+	case "csv":
+		rows := make([][]string, len(patterns))
+		for i, p := range patterns {
+			rows[i] = []string{p.Day, fmt.Sprintf("%d", p.Hour), fmt.Sprintf("%d", p.Commits)}
+		}
+		return f.writeCSV([]string{"day", "hour", "commits"}, rows)
+	default:
+		days := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+		grid := [7][24]int{}
+		for _, p := range patterns {
+			for d, name := range days {
+				if name == p.Day {
+					grid[d][p.Hour] = p.Commits
+				}
+			}
+		}
+
+		tw := tabwriter.NewWriter(f.w, 0, 2, 1, ' ', 0)
+		fmt.Fprintf(tw, "HOUR\t")
+		for _, d := range days {
+			fmt.Fprintf(tw, "%s\t", d)
+		}
+		fmt.Fprintln(tw)
+		for h := 0; h < 24; h++ {
+			fmt.Fprintf(tw, "%02d:00\t", h)
+			for d := 0; d < 7; d++ {
+				if grid[d][h] > 0 {
+					fmt.Fprintf(tw, "%d\t", grid[d][h])
+				} else {
+					fmt.Fprintf(tw, ".\t")
+				}
+			}
+			fmt.Fprintln(tw)
+		}
+		return tw.Flush()
+	}
+}
+
+func (f *Formatter) PrintDevNetwork(edges []DevEdge) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(edges)
+	case "csv":
+		rows := make([][]string, len(edges))
+		for i, e := range edges {
+			rows[i] = []string{
+				e.DevA, e.DevB,
+				fmt.Sprintf("%d", e.SharedFiles),
+				fmt.Sprintf("%.1f", e.Weight),
+			}
+		}
+		return f.writeCSV([]string{"dev_a", "dev_b", "shared_files", "weight_pct"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "DEV A\tDEV B\tSHARED FILES\tWEIGHT\n")
+		fmt.Fprintf(tw, "-----\t-----\t------------\t------\n")
+		for _, e := range edges {
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%.1f%%\n", e.DevA, e.DevB, e.SharedFiles, e.Weight)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintReport(v interface{}) error {
 	return f.writeJSON(v)
 }

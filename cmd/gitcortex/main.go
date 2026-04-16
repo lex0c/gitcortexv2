@@ -23,6 +23,7 @@ func main() {
 
 	rootCmd.AddCommand(extractCmd())
 	rootCmd.AddCommand(statsCmd())
+	rootCmd.AddCommand(diffCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -74,39 +75,65 @@ func extractCmd() *cobra.Command {
 	return cmd
 }
 
+// --- Stats ---
+
 var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
 var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
 var validStats = map[string]bool{
 	"summary": true, "contributors": true, "hotspots": true,
 	"activity": true, "busfactor": true, "coupling": true,
+	"churn-risk": true, "working-patterns": true, "dev-network": true,
+}
+
+type statsFlags struct {
+	input              string
+	format             string
+	topN               int
+	granularity        string
+	stat               string
+	couplingMaxFiles   int
+	couplingMinChanges int
+	churnHalfLife      int
+	networkMinFiles    int
+}
+
+func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
+	cmd.Flags().StringVar(&sf.input, "input", "git_data.jsonl", "Input JSONL file from extract")
+	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
+	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show")
+	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network")
+	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
+	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
+	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
+	cmd.Flags().IntVar(&sf.networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
+}
+
+func validateStatsFlags(sf *statsFlags) error {
+	if !validFormats[sf.format] {
+		return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", sf.format)
+	}
+	if !validGranularities[sf.granularity] {
+		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
+	}
+	if sf.stat != "" && !validStats[sf.stat] {
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network", sf.stat)
+	}
+	return nil
 }
 
 func statsCmd() *cobra.Command {
-	var (
-		input              string
-		format             string
-		topN               int
-		granularity        string
-		stat               string
-		couplingMaxFiles   int
-		couplingMinChanges int
-	)
+	var sf statsFlags
 
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Generate statistics from extracted JSONL data",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !validFormats[format] {
-				return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", format)
-			}
-			if !validGranularities[granularity] {
-				return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", granularity)
-			}
-			if stat != "" && !validStats[stat] {
-				return fmt.Errorf("invalid --stat %q; must be one of: summary, contributors, hotspots, activity, busfactor, coupling", stat)
+			if err := validateStatsFlags(&sf); err != nil {
+				return err
 			}
 
-			ds, err := stats.LoadJSONL(input)
+			ds, err := stats.LoadJSONL(sf.input)
 			if err != nil {
 				return err
 			}
@@ -114,87 +141,232 @@ func statsCmd() *cobra.Command {
 			fmt.Fprintf(os.Stderr, "Loaded %d commits, %d files, %d devs\n\n",
 				len(ds.Commits), len(ds.Files), len(ds.Devs))
 
-			showAll := stat == ""
-			f := stats.NewFormatter(os.Stdout, format)
-
-			if format == "json" {
-				return printStatsJSON(f, ds, topN, granularity, stat, couplingMaxFiles, couplingMinChanges)
-			}
-
-			if showAll || stat == "summary" {
-				fmt.Fprintln(os.Stderr, "=== Summary ===")
-				if err := f.PrintSummary(stats.ComputeSummary(ds)); err != nil {
-					return err
-				}
-			}
-			if showAll || stat == "contributors" {
-				fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", topN)
-				if err := f.PrintContributors(stats.TopContributors(ds, topN)); err != nil {
-					return err
-				}
-			}
-			if showAll || stat == "hotspots" {
-				fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", topN)
-				if err := f.PrintHotspots(stats.FileHotspots(ds, topN)); err != nil {
-					return err
-				}
-			}
-			if showAll || stat == "activity" {
-				fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", granularity)
-				if err := f.PrintActivity(stats.ActivityOverTime(ds, granularity)); err != nil {
-					return err
-				}
-			}
-			if showAll || stat == "busfactor" {
-				fmt.Fprintf(os.Stderr, "\n=== Top %d Bus Factor Risk ===\n", topN)
-				if err := f.PrintBusFactor(stats.BusFactor(ds, topN)); err != nil {
-					return err
-				}
-			}
-			if showAll || stat == "coupling" {
-				fmt.Fprintf(os.Stderr, "\n=== Top %d File Coupling ===\n", topN)
-				if err := f.PrintCoupling(stats.FileCoupling(ds, topN, couplingMaxFiles, couplingMinChanges)); err != nil {
-					return err
-				}
-			}
-
-			return nil
+			return renderStats(ds, &sf)
 		},
 	}
 
-	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file from extract")
+	addStatsFlags(cmd, &sf)
+	return cmd
+}
+
+func renderStats(ds *stats.Dataset, sf *statsFlags) error {
+	showAll := sf.stat == ""
+	f := stats.NewFormatter(os.Stdout, sf.format)
+
+	if sf.format == "json" {
+		return renderStatsJSON(f, ds, sf)
+	}
+
+	if showAll || sf.stat == "summary" {
+		fmt.Fprintln(os.Stderr, "=== Summary ===")
+		if err := f.PrintSummary(stats.ComputeSummary(ds)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "contributors" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", sf.topN)
+		if err := f.PrintContributors(stats.TopContributors(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "hotspots" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", sf.topN)
+		if err := f.PrintHotspots(stats.FileHotspots(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "activity" {
+		fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", sf.granularity)
+		if err := f.PrintActivity(stats.ActivityOverTime(ds, sf.granularity)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "busfactor" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Bus Factor Risk ===\n", sf.topN)
+		if err := f.PrintBusFactor(stats.BusFactor(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "coupling" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d File Coupling ===\n", sf.topN)
+		if err := f.PrintCoupling(stats.FileCoupling(ds, sf.topN, sf.couplingMaxFiles, sf.couplingMinChanges)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "churn-risk" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Churn Risk ===\n", sf.topN)
+		if err := f.PrintChurnRisk(stats.ChurnRisk(ds, sf.topN, sf.churnHalfLife)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "working-patterns" {
+		fmt.Fprintln(os.Stderr, "\n=== Working Patterns ===")
+		if err := f.PrintWorkingPatterns(stats.WorkingPatterns(ds)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "dev-network" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Developer Connections ===\n", sf.topN)
+		if err := f.PrintDevNetwork(stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) error {
+	showAll := sf.stat == ""
+	report := make(map[string]interface{})
+
+	if showAll || sf.stat == "summary" {
+		report["summary"] = stats.ComputeSummary(ds)
+	}
+	if showAll || sf.stat == "contributors" {
+		report["contributors"] = stats.TopContributors(ds, sf.topN)
+	}
+	if showAll || sf.stat == "hotspots" {
+		report["hotspots"] = stats.FileHotspots(ds, sf.topN)
+	}
+	if showAll || sf.stat == "activity" {
+		report["activity"] = stats.ActivityOverTime(ds, sf.granularity)
+	}
+	if showAll || sf.stat == "busfactor" {
+		report["busfactor"] = stats.BusFactor(ds, sf.topN)
+	}
+	if showAll || sf.stat == "coupling" {
+		report["coupling"] = stats.FileCoupling(ds, sf.topN, sf.couplingMaxFiles, sf.couplingMinChanges)
+	}
+	if showAll || sf.stat == "churn-risk" {
+		report["churn_risk"] = stats.ChurnRisk(ds, sf.topN, sf.churnHalfLife)
+	}
+	if showAll || sf.stat == "working-patterns" {
+		report["working_patterns"] = stats.WorkingPatterns(ds)
+	}
+	if showAll || sf.stat == "dev-network" {
+		report["dev_network"] = stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)
+	}
+
+	return f.PrintReport(report)
+}
+
+// --- Diff ---
+
+func diffCmd() *cobra.Command {
+	var (
+		input string
+		from  string
+		to    string
+		vsFrom string
+		vsTo   string
+		format string
+		topN   int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "diff",
+		Short: "Compare stats between two time periods",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if from == "" || to == "" {
+				return fmt.Errorf("--from and --to are required (format: YYYY-MM-DD)")
+			}
+			if !validFormats[format] {
+				return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", format)
+			}
+
+			ds, err := stats.LoadJSONL(input)
+			if err != nil {
+				return err
+			}
+
+			periodA := stats.FilterByDateRange(ds, from, to)
+			labelA := fmt.Sprintf("%s to %s", from, to)
+
+			fmt.Fprintf(os.Stderr, "Period A (%s): %d commits, %d files\n",
+				labelA, len(periodA.Commits), len(periodA.Files))
+
+			if vsFrom != "" && vsTo != "" {
+				periodB := stats.FilterByDateRange(ds, vsFrom, vsTo)
+				labelB := fmt.Sprintf("%s to %s", vsFrom, vsTo)
+
+				fmt.Fprintf(os.Stderr, "Period B (%s): %d commits, %d files\n\n",
+					labelB, len(periodB.Commits), len(periodB.Files))
+
+				return renderDiff(periodA, periodB, labelA, labelB, format, topN)
+			}
+
+			fmt.Fprintln(os.Stderr)
+
+			sf := &statsFlags{format: format, topN: topN, granularity: "month",
+				couplingMaxFiles: 50, couplingMinChanges: 5, churnHalfLife: 90, networkMinFiles: 5}
+			return renderStats(periodA, sf)
+		},
+	}
+
+	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file")
+	cmd.Flags().StringVar(&from, "from", "", "Start date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&to, "to", "", "End date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&vsFrom, "vs-from", "", "Comparison period start date")
+	cmd.Flags().StringVar(&vsTo, "vs-to", "", "Comparison period end date")
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")
-	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries to show")
-	cmd.Flags().StringVar(&granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&stat, "stat", "", "Show only a specific stat: summary, contributors, hotspots, activity, busfactor, coupling")
-	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis (filters bulk commits)")
-	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes to include in coupling results")
+	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries")
 
 	return cmd
 }
 
-func printStatsJSON(f *stats.Formatter, ds *stats.Dataset, topN int, granularity, stat string, couplingMaxFiles, couplingMinChanges int) error {
-	showAll := stat == ""
-	report := make(map[string]interface{})
+func renderDiff(a, b *stats.Dataset, labelA, labelB, format string, topN int) error {
+	f := stats.NewFormatter(os.Stdout, format)
 
-	if showAll || stat == "summary" {
-		report["summary"] = stats.ComputeSummary(ds)
-	}
-	if showAll || stat == "contributors" {
-		report["contributors"] = stats.TopContributors(ds, topN)
-	}
-	if showAll || stat == "hotspots" {
-		report["hotspots"] = stats.FileHotspots(ds, topN)
-	}
-	if showAll || stat == "activity" {
-		report["activity"] = stats.ActivityOverTime(ds, granularity)
-	}
-	if showAll || stat == "busfactor" {
-		report["busfactor"] = stats.BusFactor(ds, topN)
-	}
-	if showAll || stat == "coupling" {
-		report["coupling"] = stats.FileCoupling(ds, topN, couplingMaxFiles, couplingMinChanges)
+	summA := stats.ComputeSummary(a)
+	summB := stats.ComputeSummary(b)
+
+	if format == "json" {
+		report := map[string]interface{}{
+			"period_a": map[string]interface{}{
+				"label":        labelA,
+				"summary":      summA,
+				"contributors": stats.TopContributors(a, topN),
+				"hotspots":     stats.FileHotspots(a, topN),
+			},
+			"period_b": map[string]interface{}{
+				"label":        labelB,
+				"summary":      summB,
+				"contributors": stats.TopContributors(b, topN),
+				"hotspots":     stats.FileHotspots(b, topN),
+			},
+		}
+		return f.PrintReport(report)
 	}
 
-	return f.PrintReport(report)
+	fmt.Fprintf(os.Stderr, "=== Summary: %s vs %s ===\n", labelA, labelB)
+	printDiffLine := func(label string, va, vb int) {
+		delta := vb - va
+		sign := "+"
+		if delta < 0 {
+			sign = ""
+		}
+		fmt.Fprintf(os.Stdout, "%-25s %8d  →  %8d  (%s%d)\n", label, va, vb, sign, delta)
+	}
+
+	printDiffLine("Commits", summA.TotalCommits, summB.TotalCommits)
+	printDiffLine("Additions", int(summA.TotalAdditions), int(summB.TotalAdditions))
+	printDiffLine("Deletions", int(summA.TotalDeletions), int(summB.TotalDeletions))
+	printDiffLine("Files touched", summA.TotalFiles, summB.TotalFiles)
+	printDiffLine("Merge commits", summA.MergeCommits, summB.MergeCommits)
+
+	fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors: %s ===\n", topN, labelA)
+	if err := f.PrintContributors(stats.TopContributors(a, topN)); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors: %s ===\n", topN, labelB)
+	if err := f.PrintContributors(stats.TopContributors(b, topN)); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "\n=== Top %d Hotspots: %s ===\n", topN, labelA)
+	if err := f.PrintHotspots(stats.FileHotspots(a, topN)); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "\n=== Top %d Hotspots: %s ===\n", topN, labelB)
+	return f.PrintHotspots(stats.FileHotspots(b, topN))
 }

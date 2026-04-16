@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -411,5 +412,289 @@ func FileCoupling(ds *Dataset, n, maxFilesPerCommit, minCoChanges int) []Couplin
 	}
 
 	return results
+}
+
+// --- Churn Risk ---
+
+type ChurnRiskResult struct {
+	Path           string
+	RecentChurn    float64
+	BusFactor      int
+	RiskScore      float64
+	TotalChanges   int
+	LastChangeDate string
+}
+
+// ChurnRisk ranks files by recency-weighted churn combined with bus factor.
+// halfLifeDays controls how fast old changes decay (default 90 = changes lose
+// half their weight every 90 days).
+func ChurnRisk(ds *Dataset, n, halfLifeDays int) []ChurnRiskResult {
+	now := time.Now()
+	lambda := math.Ln2 / float64(halfLifeDays)
+
+	commitDates := make(map[string]time.Time)
+	commitAuthors := make(map[string]string)
+	for _, c := range ds.Commits {
+		t := parseDate(c.AuthorDate)
+		if !t.IsZero() {
+			commitDates[c.SHA] = t
+		}
+		commitAuthors[c.SHA] = c.AuthorEmail
+	}
+
+	type fileAcc struct {
+		recentChurn float64
+		changes     int
+		lastChange  time.Time
+		devs        map[string]struct{}
+	}
+
+	byPath := make(map[string]*fileAcc)
+
+	for _, f := range ds.Files {
+		path := f.PathCurrent
+		if path == "" {
+			continue
+		}
+
+		acc, ok := byPath[path]
+		if !ok {
+			acc = &fileAcc{devs: make(map[string]struct{})}
+			byPath[path] = acc
+		}
+
+		acc.changes++
+		churn := float64(f.Additions + f.Deletions)
+
+		t, hasDate := commitDates[f.Commit]
+		if hasDate {
+			days := now.Sub(t).Hours() / 24
+			weight := math.Exp(-lambda * days)
+			acc.recentChurn += churn * weight
+			if t.After(acc.lastChange) {
+				acc.lastChange = t
+			}
+		}
+
+		if email, ok := commitAuthors[f.Commit]; ok {
+			acc.devs[email] = struct{}{}
+		}
+	}
+
+	var results []ChurnRiskResult
+	for path, acc := range byPath {
+		bf := len(acc.devs)
+		if bf < 1 {
+			bf = 1
+		}
+
+		risk := acc.recentChurn / float64(bf)
+
+		lastDate := ""
+		if !acc.lastChange.IsZero() {
+			lastDate = acc.lastChange.Format("2006-01-02")
+		}
+
+		results = append(results, ChurnRiskResult{
+			Path:           path,
+			RecentChurn:    math.Round(acc.recentChurn*10) / 10,
+			BusFactor:      len(acc.devs),
+			RiskScore:      math.Round(risk*10) / 10,
+			TotalChanges:   acc.changes,
+			LastChangeDate: lastDate,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].RiskScore > results[j].RiskScore
+	})
+
+	if n > 0 && n < len(results) {
+		results = results[:n]
+	}
+
+	return results
+}
+
+// --- Working Patterns ---
+
+type WorkingPattern struct {
+	Hour     int
+	Day      string
+	Commits  int
+}
+
+func WorkingPatterns(ds *Dataset) []WorkingPattern {
+	days := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+	dayIndex := map[time.Weekday]int{
+		time.Monday: 0, time.Tuesday: 1, time.Wednesday: 2,
+		time.Thursday: 3, time.Friday: 4, time.Saturday: 5, time.Sunday: 6,
+	}
+
+	grid := [7][24]int{}
+
+	for _, c := range ds.Commits {
+		t := parseDate(c.AuthorDate)
+		if t.IsZero() {
+			continue
+		}
+		di := dayIndex[t.Weekday()]
+		grid[di][t.Hour()]++
+	}
+
+	var results []WorkingPattern
+	for d := 0; d < 7; d++ {
+		for h := 0; h < 24; h++ {
+			if grid[d][h] > 0 {
+				results = append(results, WorkingPattern{
+					Hour:    h,
+					Day:     days[d],
+					Commits: grid[d][h],
+				})
+			}
+		}
+	}
+
+	return results
+}
+
+// --- Developer Network ---
+
+type DevEdge struct {
+	DevA        string
+	DevB        string
+	SharedFiles int
+	Weight      float64
+}
+
+// DeveloperNetwork builds a collaboration graph where edges connect developers
+// who modified the same files. Weight = shared files / max(files_A, files_B).
+func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
+	commitAuthor := make(map[string]string)
+	for _, c := range ds.Commits {
+		commitAuthor[c.SHA] = c.AuthorEmail
+	}
+
+	fileDevs := make(map[string]map[string]struct{})
+	for _, f := range ds.Files {
+		path := f.PathCurrent
+		if path == "" {
+			continue
+		}
+		email, ok := commitAuthor[f.Commit]
+		if !ok {
+			continue
+		}
+		if fileDevs[path] == nil {
+			fileDevs[path] = make(map[string]struct{})
+		}
+		fileDevs[path][email] = struct{}{}
+	}
+
+	type devPair struct{ a, b string }
+	pairFiles := make(map[devPair]int)
+	devFileCount := make(map[string]int)
+
+	for _, devSet := range fileDevs {
+		devs := make([]string, 0, len(devSet))
+		for d := range devSet {
+			devs = append(devs, d)
+		}
+		for _, d := range devs {
+			devFileCount[d]++
+		}
+		for i := 0; i < len(devs); i++ {
+			for j := i + 1; j < len(devs); j++ {
+				a, b := devs[i], devs[j]
+				if a > b {
+					a, b = b, a
+				}
+				pairFiles[devPair{a, b}]++
+			}
+		}
+	}
+
+	var results []DevEdge
+	for p, shared := range pairFiles {
+		if shared < minSharedFiles {
+			continue
+		}
+		maxFiles := devFileCount[p.a]
+		if devFileCount[p.b] > maxFiles {
+			maxFiles = devFileCount[p.b]
+		}
+		weight := 0.0
+		if maxFiles > 0 {
+			weight = float64(shared) / float64(maxFiles) * 100
+		}
+
+		results = append(results, DevEdge{
+			DevA:        p.a,
+			DevB:        p.b,
+			SharedFiles: shared,
+			Weight:      math.Round(weight*10) / 10,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].SharedFiles > results[j].SharedFiles
+	})
+
+	if n > 0 && n < len(results) {
+		results = results[:n]
+	}
+
+	return results
+}
+
+// --- Period Filtering ---
+
+// FilterByDateRange returns a new Dataset containing only records within the date range.
+func FilterByDateRange(ds *Dataset, from, to string) *Dataset {
+	fromTime := parseDate(from + "T00:00:00Z")
+	toTime := parseDate(to + "T23:59:59Z")
+
+	if fromTime.IsZero() && toTime.IsZero() {
+		return ds
+	}
+
+	commitSet := make(map[string]bool)
+	var filtered Dataset
+
+	for _, c := range ds.Commits {
+		t := parseDate(c.AuthorDate)
+		if t.IsZero() {
+			continue
+		}
+		if !fromTime.IsZero() && t.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && t.After(toTime) {
+			continue
+		}
+		filtered.Commits = append(filtered.Commits, c)
+		commitSet[c.SHA] = true
+	}
+
+	for _, f := range ds.Files {
+		if commitSet[f.Commit] {
+			filtered.Files = append(filtered.Files, f)
+		}
+	}
+	for _, p := range ds.Parents {
+		if commitSet[p.SHA] {
+			filtered.Parents = append(filtered.Parents, p)
+		}
+	}
+
+	devSeen := make(map[string]bool)
+	for _, d := range ds.Devs {
+		if !devSeen[d.DevID] {
+			devSeen[d.DevID] = true
+			filtered.Devs = append(filtered.Devs, d)
+		}
+	}
+
+	return &filtered
 }
 
