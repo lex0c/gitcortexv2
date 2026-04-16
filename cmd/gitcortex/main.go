@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"gitcortex/internal/extract"
@@ -528,6 +529,14 @@ func printCIJSON(violations []ciViolation) {
 	enc.Encode(violations)
 }
 
+func absPath(p string) string {
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return a
+}
+
 // --- Report ---
 
 func reportCmd() *cobra.Command {
@@ -564,7 +573,12 @@ func reportCmd() *cobra.Command {
 				NetworkMinFiles:    networkMinFiles,
 			}
 
-			if err := report.Generate(f, ds, topN, sf); err != nil {
+			repoName := strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
+			if repoName == "git_data" {
+				repoName = filepath.Base(filepath.Dir(absPath(input)))
+			}
+
+			if err := report.Generate(f, ds, repoName, topN, sf); err != nil {
 				return fmt.Errorf("generate report: %w", err)
 			}
 

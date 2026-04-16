@@ -9,6 +9,7 @@ import (
 )
 
 type ReportData struct {
+	RepoName     string
 	Summary      stats.Summary
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
@@ -24,7 +25,7 @@ type ReportData struct {
 	MaxPattern   int
 }
 
-func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) error {
+func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
 	patterns := stats.WorkingPatterns(ds)
 	var grid [7][24]int
 	maxP := 0
@@ -41,6 +42,7 @@ func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) err
 	}
 
 	data := ReportData{
+		RepoName:     repoName,
 		Summary:      stats.ComputeSummary(ds),
 		Contributors: stats.TopContributors(ds, topN),
 		Hotspots:     stats.FileHotspots(ds, topN),

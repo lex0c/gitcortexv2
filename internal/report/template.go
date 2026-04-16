@@ -4,13 +4,14 @@ const reportHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>gitcortex report</title>
+<title>{{.RepoName}} report</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
 h1 { font-size: 24px; margin-bottom: 8px; }
-h2 { font-size: 18px; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #d0d7de; }
+h2 { font-size: 18px; margin: 32px 0 4px; padding-bottom: 8px; border-bottom: 1px solid #d0d7de; }
 .subtitle { color: #656d76; font-size: 14px; margin-bottom: 24px; }
+.hint { color: #656d76; font-size: 12px; margin-bottom: 12px; font-style: italic; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
 .card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
 .card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
@@ -39,7 +40,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </head>
 <body>
 
-<h1>gitcortex report</h1>
+<h1>{{.RepoName}} report</h1>
 <p class="subtitle">{{.Summary.FirstCommitDate}} to {{.Summary.LastCommitDate}}</p>
 
 <div class="cards">
@@ -55,6 +56,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Activity}}
 <h2>Activity</h2>
+<p class="hint">Commit volume over time. Spikes may indicate releases or sprints. Sustained drops may signal attrition.</p>
 <table>
 <tr><th>Period</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
 {{$maxCommits := 0}}{{range .Activity}}{{if gt .Commits $maxCommits}}{{$maxCommits = .Commits}}{{end}}{{end}}
@@ -72,6 +74,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Contributors}}
 <h2>Top Contributors</h2>
+<p class="hint">Ranked by commit count. High commit count with low lines may indicate small fixes; low count with high lines may indicate large features.</p>
 <table>
 <tr><th>Name</th><th>Email</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
 {{$maxContrib := 0}}{{range .Contributors}}{{if gt .Commits $maxContrib}}{{$maxContrib = .Commits}}{{end}}{{end}}
@@ -90,6 +93,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Hotspots}}
 <h2>File Hotspots</h2>
+<p class="hint">Most frequently changed files. High churn with few devs = knowledge silo. High churn with many devs = shared bottleneck.</p>
 <table>
 <tr><th>Path</th><th>Commits</th><th>Churn</th><th></th><th>Devs</th></tr>
 {{$maxChurn := int64 0}}{{range .Hotspots}}{{if gt .Churn $maxChurn}}{{$maxChurn = .Churn}}{{end}}{{end}}
@@ -107,6 +111,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
+<p class="hint">Files ranked by recent churn weighted by bus factor. High risk = lots of recent changes owned by few people. Prioritize knowledge transfer here.</p>
 <table>
 <tr><th>Path</th><th>Risk</th><th></th><th>Recent Churn</th><th>Bus Factor</th><th>Last Change</th></tr>
 {{$maxRisk := 0.0}}{{range .ChurnRisk}}{{if gt .RiskScore $maxRisk}}{{$maxRisk = .RiskScore}}{{end}}{{end}}
@@ -125,6 +130,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .BusFactor}}
 <h2>Bus Factor Risk</h2>
+<p class="hint">Files with fewest developers owning 80%+ of changes. Bus factor 1 = if that person leaves, nobody else knows the code.</p>
 <table>
 <tr><th>Path</th><th>Bus Factor</th><th>Top Devs</th></tr>
 {{range .BusFactor}}
@@ -139,6 +145,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Coupling}}
 <h2>File Coupling</h2>
+<p class="hint">Files that always change together. Expected for test+code pairs. Unexpected coupling between unrelated modules signals hidden dependencies.</p>
 <table>
 <tr><th>File A</th><th>File B</th><th>Co-changes</th><th>Coupling</th></tr>
 {{range .Coupling}}
@@ -154,6 +161,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if gt .MaxPattern 0}}
 <h2>Working Patterns</h2>
+<p class="hint">Commit distribution by day and hour. Reveals team timezones, work-life balance, and off-hours work patterns.</p>
 <div class="heatmap">
   <div></div>
   {{range $h := seq 0 23}}<div class="hour-label">{{printf "%02d" $h}}</div>{{end}}
@@ -169,6 +177,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .TopCommits}}
 <h2>Top Commits</h2>
+<p class="hint">Largest commits by lines changed. Unusually large commits may be imports, generated code, or risky big-bang changes worth reviewing.</p>
 <table>
 <tr><th>SHA</th><th>Author</th><th>Date</th><th>Lines</th><th>Files</th>{{if and (gt (len .TopCommits) 0) (index .TopCommits 0).Message}}<th>Message</th>{{end}}</tr>
 {{range .TopCommits}}
@@ -186,6 +195,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .DevNetwork}}
 <h2>Developer Network</h2>
+<p class="hint">Developers who modify the same files. Strong connections indicate collaboration or shared ownership. Isolated nodes may signal silos.</p>
 <table>
 <tr><th>Developer A</th><th>Developer B</th><th>Shared Files</th><th>Weight</th></tr>
 {{range .DevNetwork}}
@@ -201,6 +211,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Profiles}}
 <h2>Developer Profiles</h2>
+<p class="hint">Per-developer breakdown showing their top files, monthly activity, and weekend work percentage.</p>
 {{range .Profiles}}
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
   <div style="font-size:16px; font-weight:600;">{{.Name}} <span class="mono" style="font-size:12px; color:#656d76;">&lt;{{.Email}}&gt;</span></div>
