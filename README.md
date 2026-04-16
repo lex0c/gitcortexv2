@@ -121,7 +121,6 @@ Available stats:
 |------|-------------|
 | `summary` | Total commits, devs, files, additions/deletions, merge count, averages, date range |
 | `contributors` | Ranked by commit count with additions/deletions per developer |
-| `ranking` | Composite contributor score (commits, lines, files touched, active days) |
 | `hotspots` | Most frequently changed files with churn and unique developer count |
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
@@ -129,17 +128,17 @@ Available stats:
 | `churn-risk` | Files ranked by recency-weighted churn combined with bus factor |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
-| `profile` | Per-developer report: score, top files, activity timeline, weekend % |
+| `profile` | Per-developer report: top files, activity timeline, weekend % |
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
 
 ### Developer profile
 
-Full report per developer with score, top files, monthly activity, and working patterns.
+Full report per developer with top files, monthly activity, and working patterns.
 
 ```bash
-# All developers, ranked by score
+# All developers, ranked by commits
 gitcortex stats --input data.jsonl --stat profile
 
 # Single developer
