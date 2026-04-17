@@ -54,7 +54,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <div style="margin-bottom:16px;">
   <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Scope</div>
-  <div class="hint" style="margin-bottom:6px;">Where this developer works. Percentage of unique files touched per directory.</div>
+  <div class="hint" style="margin-bottom:6px;">Where this developer works, by share of files touched per directory. One dominant bar = specialist; evenly split = generalist or cross-team.</div>
   <div style="display:flex; height:28px; border-radius:4px; overflow:hidden; gap:1px;">
     {{range $i, $s := .Profile.Scope}}<div style="flex:{{printf "%.0f" $s.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$s.Dir}} — {{$s.Files}} files ({{printf "%.0f" $s.Pct}}%)">{{if gt $s.Pct 8.0}}{{$s.Dir}} {{printf "%.0f" $s.Pct}}%{{end}}</div>{{end}}
   </div>
@@ -77,7 +77,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{if .Profile.Collaborators}}
 <div style="margin-bottom:16px;">
   <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Collaboration</div>
-  <div class="hint" style="margin-bottom:6px;">Developers who modify the same files. Number = shared files.</div>
+  <div class="hint" style="margin-bottom:6px;">Developers who touch the same files as this developer (number = shared files). Higher counts signal close collaboration or shared ownership; few connections with high counts suggest a tight pair rather than broad reach.</div>
   <div style="display:flex; flex-wrap:wrap; gap:6px;">
     {{range .Profile.Collaborators}}
     <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; background:#fff; border:1px solid #d0d7de; border-radius:16px; font-size:11px;">
@@ -91,7 +91,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Profile.TopFiles}}
 <h2>Top Files</h2>
-<p class="hint">Most impacted files by this developer. Churn = additions + deletions.</p>
+<p class="hint">Files this developer changed most (churn = additions + deletions). High churn on few files suggests deep ownership and potential knowledge concentration.</p>
 <table>
 <tr><th>Path</th><th>Commits</th><th>Churn</th><th></th></tr>
 {{$maxChurn := int64 0}}{{range .Profile.TopFiles}}{{if gt .Churn $maxChurn}}{{$maxChurn = .Churn}}{{end}}{{end}}
@@ -107,16 +107,41 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .ActivityYears}}
-<h2>Activity</h2>
-<p class="hint">Monthly commit heatmap. Darker = more active. Gaps = inactive periods.</p>
+<h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('prof-act-heatmap'),t=document.getElementById('prof-act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
+<p class="hint">Monthly commit heatmap. Darker = more commits. Gaps = inactive periods; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers.</p>
 {{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
-<div class="heatmap" style="grid-template-columns:35px repeat(12, 1fr);">
+<div id="prof-act-heatmap">
+<div style="display:grid; grid-template-columns:40px repeat(12, 1fr); gap:2px; margin-bottom:8px;">
   <div></div>
-  {{range (list "J" "F" "M" "A" "M" "J" "J" "A" "S" "O" "N" "D")}}<div class="hour-label">{{.}}</div>{{end}}
+  {{range (list "J" "F" "M" "A" "M" "J" "J" "A" "S" "O" "N" "D")}}<div style="text-align:center; font-size:10px; color:#656d76;">{{.}}</div>{{end}}
   {{range $y, $year := $.ActivityYears}}
-  <div class="mono" style="font-size:10px; color:#656d76; display:flex; align-items:center;">{{$year}}</div>
-  {{range $m := seq 0 11}}{{$cell := index (index $grid $y) $m}}<div class="cell" style="aspect-ratio:1.6; background:{{actColor $cell.Commits $max}}; {{if $cell.HasData}}color:#fff;{{else}}color:transparent;{{end}}" title="{{$year}}-{{printf "%02d" (plusInt $m 1)}}: {{$cell.Commits}} commits">{{if $cell.HasData}}{{$cell.Commits}}{{end}}</div>{{end}}
+  <div class="mono" style="font-size:11px; color:#656d76; display:flex; align-items:center;">{{$year}}</div>
+  {{range $m := seq 0 11}}{{$cell := index (index $grid $y) $m}}<div style="aspect-ratio:1.6; border-radius:2px; background:{{actColor $cell.Commits $max}}; display:flex; align-items:center; justify-content:center; font-size:9px; {{if $cell.HasData}}color:#fff;{{else}}color:transparent;{{end}}" title="{{$year}}-{{printf "%02d" (plusInt $m 1)}}:  {{$cell.Commits}} commits  +{{$cell.Additions}} -{{$cell.Deletions}}{{if and $cell.HasData (gt $cell.Additions 0)}}  ratio {{printf "%.2f" $cell.Ratio}}{{end}}">{{if $cell.HasData}}{{$cell.Commits}}{{end}}</div>{{end}}
   {{end}}
+</div>
+<div style="font-size:11px; color:#656d76; display:flex; gap:4px; align-items:center;">
+  <span>Less</span>
+  <div style="width:12px; height:12px; background:#ebedf0; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#9be9a8; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#40c463; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#30a14e; border-radius:2px;"></div>
+  <div style="width:12px; height:12px; background:#216e39; border-radius:2px;"></div>
+  <span>More</span>
+</div>
+</div>
+<div id="prof-act-table" hidden>
+<table>
+<tr><th>Period</th><th>Commits</th><th>Additions</th><th>Deletions</th><th>Del/Add</th></tr>
+{{range .Profile.MonthlyActivity}}
+<tr>
+  <td class="mono">{{.Period}}</td>
+  <td>{{.Commits}}</td>
+  <td>{{.Additions}}</td>
+  <td>{{.Deletions}}</td>
+  <td class="mono">{{if gt .Additions 0}}{{printf "%.2f" (pctRatio .Deletions .Additions)}}{{else}}—{{end}}</td>
+</tr>
+{{end}}
+</table>
 </div>
 {{end}}
 
@@ -136,7 +161,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 {{end}}
 
-<footer>Generated by <a href="https://github.com/lex0c/gitcortex" style="color:#0969da; text-decoration:none;">gitcortex</a> · {{.GeneratedAt}}</footer>
+<footer>Generated by <a href="https://github.com/lex0c/gitcortex" target="_blank" rel="noopener noreferrer" style="color:#0969da; text-decoration:none;">gitcortex</a> · {{.GeneratedAt}}</footer>
 
 </body>
 </html>`

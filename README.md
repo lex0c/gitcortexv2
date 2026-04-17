@@ -16,7 +16,7 @@ Benchmarked on open-source repositories (bare clones):
 
 ## Privacy and reliability
 
-All processing is **100% local**. No external services, no network calls, no AI, no telemetry. gitcortex reads only git metadata (commits, authors, dates, file paths, line counts) — it never reads source code content. Commit messages are excluded by default and only included with `--include-commit-messages`. Data stays on your machine as a JSONL file that you control.
+All processing is **100% local**. No external services, no network calls, **no AI**, no telemetry. gitcortex reads only git metadata (commits, authors, dates, file paths, line counts) — it never reads source code content. Commit messages are excluded by default and only included with `--include-commit-messages`. Data stays on your machine as a JSONL file that you control.
 
 ## Install
 
@@ -319,6 +319,8 @@ gitcortex report --input data.jsonl --email alice@company.com --output alice.htm
 ```
 
 Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
+
+> The HTML activity heatmap is always monthly (year × 12 months grid). For day/week/year buckets, use `gitcortex stats --stat activity --granularity <unit>`.
 
 ### CI: quality gates for pipelines
 
