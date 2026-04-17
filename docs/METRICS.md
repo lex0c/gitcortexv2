@@ -206,19 +206,27 @@ Commits ranked by total lines changed (additions + deletions).
 
 How asymmetric is the work distribution.
 
-**Calculation**: For each dimension (files, devs, directories), sort by the metric descending and count how many items are needed to reach 80% of the total.
+**Calculation**: For each dimension, sort by the metric descending and count how many items are needed to reach 80% of the total.
 
-| Metric | Dimension sorted by |
-|--------|-------------------|
-| Files | Churn (additions + deletions) |
-| Devs | Commit count |
-| Directories | Churn (additions + deletions) |
+| Dimension | Sort key | Why |
+|-----------|----------|-----|
+| Files | Churn (additions + deletions) | — |
+| Devs (commits) | Commit count | Rewards frequent committers. Inflated by bots and squash-off workflows. |
+| Devs (churn) | additions + deletions | Rewards volume of lines written/removed. Inflated by generated-file authors and verbose coders. |
+| Directories | Churn (additions + deletions) | — |
+
+Two dev lenses are surfaced because commit count alone is a flawed proxy for contribution: a squash-merge counts as one commit while a rebase-and-merge counts as many; bots routinely dominate commit leaderboards despite writing little code. Rather than replace one bias with another, gitcortex shows both and lets the divergence be the signal.
+
+**Reading the divergence**:
+- Aligned counts (e.g. 17 ≈ 17) → consistent contributor base; both lenses agree.
+- Commits ≫ churn (e.g. 267 vs 132 on kubernetes) → bots or squash workflows inflate commit counts. The smaller list is closer to "who actually wrote code".
+- Churn ≫ commits → single heavy-feature authors who commit rarely but write volumes.
 
 **Judgment thresholds**:
-- ≤10%: extremely concentrated (plus "key-person dependence" for the Devs dimension)
+- ≤10%: extremely concentrated (plus "key-person dependence" on the Devs-by-commits card)
 - ≤25%: moderately concentrated
 - \>25%: well distributed
-- total == 0: no data (neutral marker)
+- total == 0 (no commits, or no churn for the churn lens): no data (neutral marker)
 
 **How to interpret**: "20 files concentrate 80% of all churn" describes where change lands — it can indicate a healthy core module under active development, or a bottleneck if combined with low bus factor. Cross-reference with the Churn Risk section before drawing conclusions.
 

@@ -164,6 +164,7 @@ Available stats:
 | `dev-network` | Developer collaboration graph based on shared file ownership |
 | `profile` | Per-developer report: scope, contribution type, pace, collaboration, top files |
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
+| `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
 
