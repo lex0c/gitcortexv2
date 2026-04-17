@@ -269,7 +269,10 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	if showAll || sf.stat == "pareto" {
 		fmt.Fprintln(os.Stderr, "\n=== Concentration (Pareto) ===")
 		p := reportpkg.ComputePareto(ds)
-		judge := func(pct float64) string {
+		judge := func(pct float64, total int) string {
+			if total == 0 {
+				return "no data"
+			}
 			if pct <= 10 {
 				return "extremely concentrated"
 			} else if pct <= 25 {
@@ -277,9 +280,13 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			}
 			return "well distributed"
 		}
-		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn))
-		fmt.Fprintf(os.Stdout, "Devs:   %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, judge(p.DevsPct80Commits))
-		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn))
+		devsLabel := judge(p.DevsPct80Commits, p.TotalDevs)
+		if p.TotalDevs > 0 && p.DevsPct80Commits <= 10 {
+			devsLabel += ", key-person dependence"
+		}
+		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn, p.TotalFiles))
+		fmt.Fprintf(os.Stdout, "Devs:   %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
+		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn, p.TotalDirs))
 	}
 	if showAll || sf.stat == "top-commits" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Commits ===\n", sf.topN)

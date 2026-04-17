@@ -170,11 +170,12 @@ How asymmetric is the work distribution.
 | Directories | Churn (additions + deletions) |
 
 **Judgment thresholds**:
-- ≤10%: extremely concentrated (high risk)
+- ≤10%: extremely concentrated (plus "key-person dependence" for the Devs dimension)
 - ≤25%: moderately concentrated
 - \>25%: well distributed
+- total == 0: no data (neutral marker)
 
-**How to interpret**: "20 files concentrate 80% of all churn" means changes are localized — good for focus, risky if those files have low bus factor.
+**How to interpret**: "20 files concentrate 80% of all churn" describes where change lands — it can indicate a healthy core module under active development, or a bottleneck if combined with low bus factor. Cross-reference with the Churn Risk section before drawing conclusions.
 
 ## Data Flow
 

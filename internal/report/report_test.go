@@ -76,6 +76,40 @@ func TestGenerate_SmokeRender(t *testing.T) {
 	}
 }
 
+func TestGenerate_EmptyDataset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.jsonl")
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ds, err := stats.LoadJSONL(path)
+	if err != nil {
+		t.Fatalf("load empty: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := Generate(&buf, ds, "empty", 10, stats.StatsFlags{}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := buf.String()
+
+	// Empty dataset should render the "no data" path, not fall through to
+	// "extremely concentrated" (pre-fix bug: FilesPct80Churn=0.0 was <= 10).
+	wantCount := strings.Count(out, "no data")
+	if wantCount < 3 {
+		t.Errorf("expected at least 3 'no data' markers (Files/Devs/Dirs), got %d", wantCount)
+	}
+	if strings.Contains(out, "extremely concentrated") {
+		t.Errorf("output should not claim 'extremely concentrated' for empty dataset")
+	}
+	if !strings.Contains(out, "⚪") {
+		t.Errorf("output should contain neutral emoji ⚪ for empty cards")
+	}
+	if strings.Contains(out, "<no value>") {
+		t.Errorf("template rendered nil field as <no value>")
+	}
+}
+
 func TestGenerateProfile_SmokeRender(t *testing.T) {
 	ds := loadFixture(t)
 	var buf bytes.Buffer
