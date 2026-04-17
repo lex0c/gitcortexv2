@@ -20,11 +20,34 @@ All processing is **100% local**. No external services, no network calls, no AI,
 
 ## Install
 
+### Download binary (no Go required)
+
+Pre-built binaries for Linux, macOS, and Windows are available on [GitHub Releases](https://github.com/lex0c/gitcortex/releases/latest):
+
+```bash
+# Linux (x64)
+curl -L https://github.com/lex0c/gitcortex/releases/latest/download/gitcortex-linux-amd64 -o gitcortex
+chmod +x gitcortex
+sudo mv gitcortex /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/lex0c/gitcortex/releases/latest/download/gitcortex-darwin-arm64 -o gitcortex
+chmod +x gitcortex
+sudo mv gitcortex /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/lex0c/gitcortex/releases/latest/download/gitcortex-darwin-amd64 -o gitcortex
+chmod +x gitcortex
+sudo mv gitcortex /usr/local/bin/
+```
+
+### Go install
+
 ```bash
 go install github.com/lex0c/gitcortex/cmd/gitcortex@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/lex0c/gitcortex.git
