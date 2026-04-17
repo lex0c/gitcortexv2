@@ -5,6 +5,23 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
+)
+
+// Thresholds for classification and profile categorization. Exposed as named
+// constants so the values are discoverable and consistent across the package.
+// See docs/METRICS.md for rationale.
+const (
+	// Churn Risk classification
+	classifyColdChurnRatio    = 0.5  // recent_churn ≤ 0.5 × median → cold
+	classifyActiveBusFactor   = 3    // bf ≥ 3 → active (shared)
+	classifyOldAgeDays        = 180  // age ≥ 180d is "old"
+	classifyDecliningTrend    = 0.5  // trend < 0.5 = declining
+	classifyTrendWindowMonths = 3    // recent vs earlier split
+
+	// Developer profile contribution type (del/add ratio)
+	contribRefactorRatio = 0.8 // ratio ≥ 0.8 → refactor
+	contribBalancedRatio = 0.4 // 0.4 ≤ ratio < 0.8 → balanced; else growth
 )
 
 type ContributorStat struct {
@@ -68,9 +85,13 @@ type ChurnRiskResult struct {
 	Path           string
 	RecentChurn    float64
 	BusFactor      int
-	RiskScore      float64
+	RiskScore      float64 // kept for CI gate compatibility; not used for ranking
 	TotalChanges   int
 	LastChangeDate string
+	FirstChangeDate string
+	AgeDays         int
+	Trend           float64 // recent 3mo churn / earlier churn; 1 = flat, <0.5 declining, >1.5 growing
+	Label           string  // "cold" | "active" | "active-core" | "silo" | "legacy-hotspot"
 }
 
 type WorkingPattern struct {
@@ -82,8 +103,9 @@ type WorkingPattern struct {
 type DevEdge struct {
 	DevA        string
 	DevB        string
-	SharedFiles int
-	Weight      float64
+	SharedFiles int     // files where both devs contributed at least one line
+	SharedLines int64   // Σ min(linesA, linesB) across shared files — measures real overlap
+	Weight      float64 // shared_files / max(files_A, files_B) * 100 (legacy)
 }
 
 type StatsFlags struct {
@@ -110,10 +132,10 @@ func ComputeSummary(ds *Dataset) Summary {
 	}
 
 	if !ds.Earliest.IsZero() {
-		s.FirstCommitDate = ds.Earliest.Format("2006-01-02")
+		s.FirstCommitDate = ds.Earliest.UTC().Format("2006-01-02")
 	}
 	if !ds.Latest.IsZero() {
-		s.LastCommitDate = ds.Latest.Format("2006-01-02")
+		s.LastCommitDate = ds.Latest.UTC().Format("2006-01-02")
 	}
 
 	return s
@@ -160,19 +182,23 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 
 type DirStat struct {
 	Dir        string
-	Commits    int
-	Churn      int64
-	Files      int
-	UniqueDevs int
-	BusFactor  int
+	// FileTouches is the sum of per-file commit counts across files in this
+	// directory. A single commit touching N files in the directory contributes
+	// N to this number — it is NOT distinct commits. Named accordingly to
+	// avoid the prior "Commits" misnomer.
+	FileTouches int
+	Churn       int64
+	Files       int
+	UniqueDevs  int
+	BusFactor   int
 }
 
 func DirectoryStats(ds *Dataset, n int) []DirStat {
 	type dirAcc struct {
-		commits int
-		churn   int64
-		files   int
-		devs    map[string]int64
+		fileTouches int
+		churn       int64
+		files       int
+		devs        map[string]int64
 	}
 
 	dirs := make(map[string]*dirAcc)
@@ -187,7 +213,7 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 			dirs[dir] = d
 		}
 		d.files++
-		d.commits += fe.commits
+		d.fileTouches += fe.commits
 		d.churn += fe.additions + fe.deletions
 		for email, lines := range fe.devLines {
 			d.devs[email] += lines
@@ -222,16 +248,16 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 		}
 
 		result = append(result, DirStat{
-			Dir:        dir,
-			Commits:    d.commits,
-			Churn:      d.churn,
-			Files:      d.files,
-			UniqueDevs: len(d.devs),
-			BusFactor:  bf,
+			Dir:         dir,
+			FileTouches: d.fileTouches,
+			Churn:       d.churn,
+			Files:       d.files,
+			UniqueDevs:  len(d.devs),
+			BusFactor:   bf,
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool { return result[i].Commits > result[j].Commits })
+	sort.Slice(result, func(i, j int) bool { return result[i].FileTouches > result[j].FileTouches })
 	if n > 0 && n < len(result) {
 		result = result[:n]
 	}
@@ -247,17 +273,20 @@ func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 			continue
 		}
 
+		// Bucket in UTC so the same commit can't fall into different periods
+		// depending on the author's local timezone.
+		d := cm.date.UTC()
 		var key string
 		switch granularity {
 		case "day":
-			key = cm.date.Format("2006-01-02")
+			key = d.Format("2006-01-02")
 		case "week":
-			y, w := cm.date.ISOWeek()
+			y, w := d.ISOWeek()
 			key = fmt.Sprintf("%04d-W%02d", y, w)
 		case "year":
-			key = cm.date.Format("2006")
+			key = d.Format("2006")
 		default:
-			key = cm.date.Format("2006-01")
+			key = d.Format("2006-01")
 		}
 
 		b, ok := buckets[key]
@@ -376,11 +405,71 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 	return results
 }
 
+// churnTrend compares churn from the last 3 months (relative to latest) to
+// churn from earlier months. Returns 1 when there isn't enough signal to tell.
+//
+// Uses string comparison on "YYYY-MM" keys so the classification is stable
+// regardless of the day-of-month of the dataset's latest commit.
+func churnTrend(monthChurn map[string]int64, latest time.Time) float64 {
+	if len(monthChurn) < 2 || latest.IsZero() {
+		return 1
+	}
+	cutoffKey := latest.UTC().AddDate(0, -classifyTrendWindowMonths, 0).Format("2006-01")
+	var recent, earlier int64
+	for month, v := range monthChurn {
+		if month < cutoffKey {
+			earlier += v
+		} else {
+			recent += v
+		}
+	}
+	if earlier == 0 {
+		if recent == 0 {
+			return 1
+		}
+		return 2 // growing from nothing
+	}
+	return float64(recent) / float64(earlier)
+}
+
+// classifyFile assigns an actionable label based on churn, ownership, age,
+// and trend. Thresholds are package constants (classify*).
+func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64) string {
+	if recentChurn <= lowChurn {
+		return "cold"
+	}
+	if bf >= classifyActiveBusFactor {
+		return "active" // shared, healthy
+	}
+	// Concentrated ownership (bf 1-2) with meaningful churn.
+	if ageDays < classifyOldAgeDays {
+		return "active-core" // new code, single author is expected
+	}
+	if trend < classifyDecliningTrend {
+		return "legacy-hotspot" // old + concentrated + declining → urgent
+	}
+	return "silo" // old + concentrated + stable/growing → knowledge bottleneck
+}
+
 func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
+	// Compute median recentChurn as the "cold" threshold.
+	churns := make([]float64, 0, len(ds.files))
+	for _, fe := range ds.files {
+		if fe.recentChurn > 0 {
+			churns = append(churns, fe.recentChurn)
+		}
+	}
+	sort.Float64s(churns)
+	lowChurn := 0.0
+	if len(churns) > 0 {
+		median := churns[len(churns)/2]
+		lowChurn = median * classifyColdChurnRatio
+	}
+
 	var results []ChurnRiskResult
 
 	for path, fe := range ds.files {
-		// Compute real bus factor (80% threshold), same as BusFactor stat
+		// Compute bus factor (80% threshold), same as BusFactor stat.
 		type dl struct{ lines int64 }
 		devs := make([]dl, 0, len(fe.devLines))
 		var totalLines int64
@@ -406,23 +495,43 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 
 		risk := fe.recentChurn / float64(bf)
 
-		lastDate := ""
+		lastDate, firstDate := "", ""
 		if !fe.lastChange.IsZero() {
-			lastDate = fe.lastChange.Format("2006-01-02")
+			lastDate = fe.lastChange.UTC().Format("2006-01-02")
+		}
+		if !fe.firstChange.IsZero() {
+			firstDate = fe.firstChange.UTC().Format("2006-01-02")
 		}
 
+		ageDays := 0
+		if !fe.firstChange.IsZero() && !ds.Latest.IsZero() {
+			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
+		}
+
+		trend := churnTrend(fe.monthChurn, ds.Latest)
+		label := classifyFile(fe.recentChurn, lowChurn, bf, ageDays, trend)
+
 		results = append(results, ChurnRiskResult{
-			Path:           path,
-			RecentChurn:    math.Round(fe.recentChurn*10) / 10,
-			BusFactor:      bf,
-			RiskScore:      math.Round(risk*10) / 10,
-			TotalChanges:   fe.commits,
-			LastChangeDate: lastDate,
+			Path:            path,
+			RecentChurn:     math.Round(fe.recentChurn*10) / 10,
+			BusFactor:       bf,
+			RiskScore:       math.Round(risk*10) / 10,
+			TotalChanges:    fe.commits,
+			LastChangeDate:  lastDate,
+			FirstChangeDate: firstDate,
+			AgeDays:         ageDays,
+			Trend:           math.Round(trend*100) / 100,
+			Label:           label,
 		})
 	}
 
+	// Primary sort: recent churn descending (attention = where the activity is).
+	// Tiebreak: lower bus factor first (more concentrated = more exposed).
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].RiskScore > results[j].RiskScore
+		if results[i].RecentChurn != results[j].RecentChurn {
+			return results[i].RecentChurn > results[j].RecentChurn
+		}
+		return results[i].BusFactor < results[j].BusFactor
 	})
 
 	if n > 0 && n < len(results) {
@@ -478,7 +587,7 @@ func TopCommits(ds *Dataset, n int) []BigCommit {
 			SHA:          sha,
 			AuthorName:   authorName,
 			AuthorEmail:  cm.email,
-			Date:         cm.date.Format("2006-01-02"),
+			Date:         cm.date.UTC().Format("2006-01-02"),
 			Message:      msg,
 			Additions:    cm.add,
 			Deletions:    cm.del,
@@ -574,10 +683,13 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		if devGrid[cm.email] == nil {
 			devGrid[cm.email] = &[7][24]int{}
 		}
+		// devGrid uses local TZ on purpose — it describes the author's
+		// work rhythm (when *they* were typing), not UTC instants.
 		di := dayIdx[cm.date.Weekday()]
 		devGrid[cm.email][di][cm.date.Hour()]++
 
-		month := cm.date.Format("2006-01")
+		// Monthly bucket uses UTC for stable grouping.
+		month := cm.date.UTC().Format("2006-01")
 		if devMonthly[cm.email] == nil {
 			devMonthly[cm.email] = make(map[string]*ActivityBucket)
 		}
@@ -670,9 +782,9 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		if cs.Additions > 0 {
 			contribRatio = math.Round(float64(cs.Deletions)/float64(cs.Additions)*100) / 100
 		}
-		if contribRatio >= 0.8 {
+		if contribRatio >= contribRefactorRatio {
 			contribType = "refactor"
-		} else if contribRatio >= 0.4 {
+		} else if contribRatio >= contribBalancedRatio {
 			contribType = "balanced"
 		}
 
@@ -724,7 +836,11 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 
 func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 	type devPair struct{ a, b string }
-	pairFiles := make(map[devPair]int)
+	type pairAcc struct {
+		files       int
+		sharedLines int64
+	}
+	pairs := make(map[devPair]*pairAcc)
 	devFileCount := make(map[string]int)
 
 	for _, fe := range ds.files {
@@ -741,14 +857,28 @@ func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 				if a > b {
 					a, b = b, a
 				}
-				pairFiles[devPair{a, b}]++
+				acc, ok := pairs[devPair{a, b}]
+				if !ok {
+					acc = &pairAcc{}
+					pairs[devPair{a, b}] = acc
+				}
+				acc.files++
+				// Real overlap signal: min of each dev's line contribution to
+				// the file. If Alice edited 1 line of README and Bob edited
+				// 200, they share 1 line of real collaboration, not 200.
+				la, lb := fe.devLines[a], fe.devLines[b]
+				if la < lb {
+					acc.sharedLines += la
+				} else {
+					acc.sharedLines += lb
+				}
 			}
 		}
 	}
 
 	var results []DevEdge
-	for p, shared := range pairFiles {
-		if shared < minSharedFiles {
+	for p, acc := range pairs {
+		if acc.files < minSharedFiles {
 			continue
 		}
 		maxFiles := devFileCount[p.a]
@@ -757,17 +887,21 @@ func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 		}
 		weight := 0.0
 		if maxFiles > 0 {
-			weight = float64(shared) / float64(maxFiles) * 100
+			weight = float64(acc.files) / float64(maxFiles) * 100
 		}
 		results = append(results, DevEdge{
 			DevA:        p.a,
 			DevB:        p.b,
-			SharedFiles: shared,
+			SharedFiles: acc.files,
+			SharedLines: acc.sharedLines,
 			Weight:      math.Round(weight*10) / 10,
 		})
 	}
 
 	sort.Slice(results, func(i, j int) bool {
+		if results[i].SharedLines != results[j].SharedLines {
+			return results[i].SharedLines > results[j].SharedLines
+		}
 		return results[i].SharedFiles > results[j].SharedFiles
 	})
 

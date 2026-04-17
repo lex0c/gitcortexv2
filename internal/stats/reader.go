@@ -30,10 +30,16 @@ type fileEntry struct {
 	devLines    map[string]int64
 	devCommits  map[string]int
 	recentChurn float64
+	firstChange time.Time
 	lastChange  time.Time
+	monthChurn  map[string]int64 // key: "YYYY-MM"; used for trend classification
 }
 
 type filePair struct{ a, b string }
+
+type renameEdge struct {
+	oldPath, newPath string
+}
 
 type Dataset struct {
 	// Summary
@@ -57,6 +63,9 @@ type Dataset struct {
 	// Coupling (pre-aggregated during load)
 	couplingPairs       map[filePair]int
 	couplingFileChanges map[string]int
+
+	// Rename edges captured during ingest; resolved in finalizeDataset.
+	renameEdges []renameEdge
 
 	// Internal accumulators
 	contribDays  map[string]map[string]struct{} // email → set of active dates
@@ -222,9 +231,12 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			cs.Additions += c.Additions
 			cs.Deletions += c.Deletions
 
-			// Contributor detail: active days, first/last date
+			// Contributor detail: active days, first/last date.
+			// Active days bucket in UTC so the count is stable across the
+			// distributed-team case where two commits near midnight local
+			// would otherwise land in different local dates.
 			if !t.IsZero() {
-				dayKey := t.Format("2006-01-02")
+				dayKey := t.UTC().Format("2006-01-02")
 				if ds.contribDays[c.AuthorEmail] == nil {
 					ds.contribDays[c.AuthorEmail] = make(map[string]struct{})
 				}
@@ -272,6 +284,18 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				}
 			}
 
+			// Capture rename edges (git log emits status "R" followed by
+			// similarity score, e.g. "R100"). Chains are resolved in
+			// finalizeDataset once all edges are known — required because
+			// the log is emitted newest-first, so pre-rename history comes
+			// later in the stream than the rename commit itself.
+			if strings.HasPrefix(cf.Status, "R") && cf.PathPrevious != "" && cf.PathCurrent != "" && cf.PathPrevious != cf.PathCurrent {
+				ds.renameEdges = append(ds.renameEdges, renameEdge{
+					oldPath: pathPrefix + cf.PathPrevious,
+					newPath: pathPrefix + cf.PathCurrent,
+				})
+			}
+
 			path := cf.PathCurrent
 			if path == "" {
 				path = cf.PathPrevious
@@ -286,7 +310,11 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			// File aggregation (hotspots + busfactor + churn-risk)
 			fe, ok := ds.files[path]
 			if !ok {
-				fe = &fileEntry{devLines: make(map[string]int64), devCommits: make(map[string]int)}
+				fe = &fileEntry{
+					devLines:   make(map[string]int64),
+					devCommits: make(map[string]int),
+					monthChurn: make(map[string]int64),
+				}
 				ds.files[path] = fe
 			}
 			fe.commits++
@@ -311,6 +339,10 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 					if cm.date.After(fe.lastChange) {
 						fe.lastChange = cm.date
 					}
+					if fe.firstChange.IsZero() || cm.date.Before(fe.firstChange) {
+						fe.firstChange = cm.date
+					}
+					fe.monthChurn[cm.date.UTC().Format("2006-01")] += cf.Additions + cf.Deletions
 				}
 			}
 
@@ -346,20 +378,143 @@ func finalizeDataset(ds *Dataset) {
 		}
 	}
 
+	applyRenames(ds)
+	// UniqueFileCount reflects post-merge canonical paths.
+	ds.UniqueFileCount = len(ds.files)
+
 	for email, cs := range ds.contributors {
 		cs.ActiveDays = len(ds.contribDays[email])
 		cs.FilesTouched = len(ds.contribFiles[email])
 		if t, ok := ds.contribFirst[email]; ok {
-			cs.FirstDate = t.Format("2006-01-02")
+			cs.FirstDate = t.UTC().Format("2006-01-02")
 		}
 		if t, ok := ds.contribLast[email]; ok {
-			cs.LastDate = t.Format("2006-01-02")
+			cs.LastDate = t.UTC().Format("2006-01-02")
 		}
 	}
 	ds.contribDays = nil
 	ds.contribFiles = nil
 	ds.contribFirst = nil
 	ds.contribLast = nil
+}
+
+// applyRenames resolves rename edges captured during ingest and re-keys
+// ds.files / coupling maps to their canonical (latest) path. Safe to call
+// with no edges. Defensive against cycles (A→B→A) — rare but possible if
+// a repo reverted a rename.
+func applyRenames(ds *Dataset) {
+	if len(ds.renameEdges) == 0 {
+		return
+	}
+
+	direct := make(map[string]string, len(ds.renameEdges))
+	for _, e := range ds.renameEdges {
+		// JSONL is newest-first. If the same old path has multiple rename
+		// events (rare — happens when a file is recreated after rename and
+		// renamed again), keep the *first* edge we see, which corresponds
+		// to the chronologically newest rename. Later iterations are older
+		// and should not overwrite.
+		if _, ok := direct[e.oldPath]; !ok {
+			direct[e.oldPath] = e.newPath
+		}
+	}
+
+	canonical := func(p string) string {
+		seen := map[string]struct{}{}
+		for {
+			if _, ok := seen[p]; ok {
+				return p // cycle detected — bail with current
+			}
+			seen[p] = struct{}{}
+			next, ok := direct[p]
+			if !ok || next == p {
+				return p
+			}
+			p = next
+		}
+	}
+
+	// Re-key file entries, merging colliders.
+	newFiles := make(map[string]*fileEntry, len(ds.files))
+	for path, fe := range ds.files {
+		c := canonical(path)
+		if existing, ok := newFiles[c]; ok {
+			mergeFileEntry(existing, fe)
+		} else {
+			newFiles[c] = fe
+		}
+	}
+	ds.files = newFiles
+
+	// Re-key coupling denominator.
+	newChanges := make(map[string]int, len(ds.couplingFileChanges))
+	for path, count := range ds.couplingFileChanges {
+		newChanges[canonical(path)] += count
+	}
+	ds.couplingFileChanges = newChanges
+
+	// Re-key coupling pairs. Drop pairs that collapse onto themselves
+	// (both sides resolved to the same canonical path = rename chain).
+	newPairs := make(map[filePair]int, len(ds.couplingPairs))
+	for pair, count := range ds.couplingPairs {
+		ca, cb := canonical(pair.a), canonical(pair.b)
+		if ca == cb {
+			continue
+		}
+		if ca > cb {
+			ca, cb = cb, ca
+		}
+		newPairs[filePair{a: ca, b: cb}] += count
+	}
+	ds.couplingPairs = newPairs
+
+	// Re-key contributor file sets so FilesTouched reflects canonical paths.
+	// Without this, a dev who edited old.go and new.go across a rename would
+	// be counted as touching two files instead of one.
+	for email, paths := range ds.contribFiles {
+		newSet := make(map[string]struct{}, len(paths))
+		for p := range paths {
+			newSet[canonical(p)] = struct{}{}
+		}
+		ds.contribFiles[email] = newSet
+	}
+}
+
+// mergeFileEntry folds src into dst: sums scalars, unions maps, keeps the
+// widest firstChange→lastChange span.
+func mergeFileEntry(dst, src *fileEntry) {
+	dst.commits += src.commits
+	dst.additions += src.additions
+	dst.deletions += src.deletions
+	dst.recentChurn += src.recentChurn
+
+	if dst.devLines == nil {
+		dst.devLines = make(map[string]int64)
+	}
+	for k, v := range src.devLines {
+		dst.devLines[k] += v
+	}
+	if dst.devCommits == nil {
+		dst.devCommits = make(map[string]int)
+	}
+	for k, v := range src.devCommits {
+		dst.devCommits[k] += v
+	}
+	if dst.monthChurn == nil {
+		dst.monthChurn = make(map[string]int64)
+	}
+	for k, v := range src.monthChurn {
+		dst.monthChurn[k] += v
+	}
+
+	if !src.firstChange.IsZero() {
+		if dst.firstChange.IsZero() || src.firstChange.Before(dst.firstChange) {
+			dst.firstChange = src.firstChange
+		}
+	}
+	if src.lastChange.After(dst.lastChange) {
+		dst.lastChange = src.lastChange
+	}
 }
 
 func flushCoupling(ds *Dataset, files []string, maxFiles int) {

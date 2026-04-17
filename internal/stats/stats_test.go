@@ -212,12 +212,99 @@ func TestChurnRisk(t *testing.T) {
 	if len(result) != 3 {
 		t.Fatalf("len = %d", len(result))
 	}
-	// main.go: recentChurn=100, 2 devs → risk=50
-	// util.go: recentChurn=50, 1 dev → risk=50
-	// readme.md: recentChurn=10, 1 dev → risk=10
-	// Sorted by risk descending
-	if result[0].RiskScore <= result[len(result)-1].RiskScore {
-		t.Errorf("not sorted descending: first=%f, last=%f", result[0].RiskScore, result[len(result)-1].RiskScore)
+	// Sorted by RecentChurn descending.
+	// main.go=100, util.go=50, readme.md=10.
+	for i := 1; i < len(result); i++ {
+		if result[i-1].RecentChurn < result[i].RecentChurn {
+			t.Errorf("not sorted by RecentChurn desc at index %d: %.1f < %.1f",
+				i, result[i-1].RecentChurn, result[i].RecentChurn)
+		}
+	}
+	if result[0].Path != "main.go" {
+		t.Errorf("top file = %q, want main.go", result[0].Path)
+	}
+}
+
+func TestClassifyFile(t *testing.T) {
+	cases := []struct {
+		name         string
+		recentChurn  float64
+		lowChurn     float64
+		bf, ageDays  int
+		trend        float64
+		want         string
+	}{
+		{"cold: churn below threshold", 5, 50, 1, 365, 1.0, "cold"},
+		{"active: shared ownership", 200, 50, 3, 365, 1.0, "active"},
+		{"active-core: new code, single author", 200, 50, 1, 30, 1.0, "active-core"},
+		{"silo: old + concentrated + stable", 200, 50, 2, 365, 1.0, "silo"},
+		{"silo: old + concentrated + growing", 200, 50, 2, 365, 2.0, "silo"},
+		{"legacy-hotspot: old + concentrated + declining", 200, 50, 1, 365, 0.3, "legacy-hotspot"},
+		{"cold wins over everything when churn low", 10, 50, 1, 365, 0.1, "cold"},
+	}
+	for _, c := range cases {
+		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestActivityBucketUsesUTC(t *testing.T) {
+	// Two commits at the same UTC instant but parsed with different TZs.
+	// Both must fall into the same month bucket — without the UTC fix they
+	// would split across months depending on the author's offset.
+	jsonl := `{"type":"commit","sha":"a","author_name":"A","author_email":"a@x","author_date":"2024-03-31T23:00:00-05:00","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"a","path_current":"x.go","additions":5,"deletions":0}
+{"type":"commit","sha":"b","author_name":"B","author_email":"b@x","author_date":"2024-04-01T06:00:00+02:00","additions":3,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"b","path_current":"x.go","additions":3,"deletions":0}
+`
+	// Same UTC instant (2024-04-01T04:00Z) expressed in -05:00 and +02:00.
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	buckets := ActivityOverTime(ds, "month")
+	if len(buckets) != 1 {
+		t.Fatalf("got %d buckets, want 1 (same UTC instant): %+v", len(buckets), buckets)
+	}
+	if buckets[0].Period != "2024-04" {
+		t.Errorf("bucket period = %q, want 2024-04", buckets[0].Period)
+	}
+}
+
+func TestChurnTrend(t *testing.T) {
+	latest := time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)
+
+	// No data → neutral.
+	if got := churnTrend(map[string]int64{}, latest); got != 1 {
+		t.Errorf("empty → %.2f, want 1", got)
+	}
+
+	// Only recent activity (nothing earlier) → growing signal (2).
+	recentOnly := map[string]int64{"2024-05": 100, "2024-06": 100}
+	if got := churnTrend(recentOnly, latest); got != 2 {
+		t.Errorf("recent-only → %.2f, want 2", got)
+	}
+
+	// Declining: old months dominate.
+	declining := map[string]int64{
+		"2024-01": 1000, "2024-02": 1000, // earlier
+		"2024-05": 50, "2024-06": 50, // recent
+	}
+	if got := churnTrend(declining, latest); got >= 0.5 {
+		t.Errorf("declining trend = %.2f, want < 0.5", got)
+	}
+
+	// Stability across day-of-month: trend must not flip based on whether
+	// `latest` falls early or late in a month. The boundary month "2024-03"
+	// should classify the same way in both cases.
+	data := map[string]int64{"2024-02": 100, "2024-03": 100, "2024-06": 100}
+	early := churnTrend(data, time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
+	late := churnTrend(data, time.Date(2024, 6, 30, 23, 0, 0, 0, time.UTC))
+	if early != late {
+		t.Errorf("trend depends on day-of-month: early=%.2f late=%.2f", early, late)
 	}
 }
 
@@ -248,6 +335,31 @@ func TestDeveloperNetwork(t *testing.T) {
 	// alice and bob share main.go
 	if result[0].SharedFiles != 1 {
 		t.Errorf("SharedFiles = %d, want 1", result[0].SharedFiles)
+	}
+}
+
+func TestDeveloperNetworkSharedLinesWeighsRealOverlap(t *testing.T) {
+	// Two files, both touched by Alice and Bob.
+	// File 1: Alice=1 line, Bob=1000 lines → real overlap = 1 (the minimum)
+	// File 2: Alice=500, Bob=500 → real overlap = 500
+	// A raw "shared files" count shows 2 in both extremes; SharedLines
+	// correctly reports 501, not 1001 or 2000.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"f1.go": {devLines: map[string]int64{"alice@x": 1, "bob@x": 1000}},
+			"f2.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 500}},
+		},
+	}
+	edges := DeveloperNetwork(ds, 10, 1)
+	if len(edges) != 1 {
+		t.Fatalf("edges = %d, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.SharedFiles != 2 {
+		t.Errorf("SharedFiles = %d, want 2", e.SharedFiles)
+	}
+	if e.SharedLines != 501 {
+		t.Errorf("SharedLines = %d, want 501 (min(1,1000)+min(500,500))", e.SharedLines)
 	}
 }
 
@@ -672,6 +784,163 @@ func TestDevProfilesContribType(t *testing.T) {
 		if profiles[0].ContribType != tt.want {
 			t.Errorf("add=%d del=%d: type=%q, want %q", tt.add, tt.del, profiles[0].ContribType, tt.want)
 		}
+	}
+}
+
+func TestRenameMergesHistory(t *testing.T) {
+	// JSONL newest-first (as git log emits). Historical sequence:
+	// 1) 2024-01 c1 creates old.go
+	// 2) 2024-02 c2 edits old.go
+	// 3) 2024-03 c3 renames old.go → new.go + edits
+	// 4) 2024-04 c4 edits new.go
+	jsonl := `{"type":"commit","sha":"c4","author_name":"A","author_email":"a@x","author_date":"2024-04-15T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c4","path_current":"new.go","path_previous":"new.go","status":"M","additions":5,"deletions":0}
+{"type":"commit","sha":"c3","author_name":"A","author_email":"a@x","author_date":"2024-03-15T10:00:00Z","additions":3,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"new.go","path_previous":"old.go","status":"R100","additions":3,"deletions":2}
+{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":8,"deletions":1,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"old.go","path_previous":"old.go","status":"M","additions":8,"deletions":1}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-05T10:00:00Z","additions":20,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"old.go","path_previous":"old.go","status":"A","additions":20,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	if _, ok := ds.files["old.go"]; ok {
+		t.Errorf("old.go should be merged into new.go, but still exists")
+	}
+	fe, ok := ds.files["new.go"]
+	if !ok {
+		t.Fatalf("new.go missing")
+	}
+	// All 4 commits merged into new.go.
+	if fe.commits != 4 {
+		t.Errorf("new.go commits = %d, want 4", fe.commits)
+	}
+	// firstChange must come from c1 (oldest), not c3 (the rename).
+	if got := fe.firstChange.UTC().Format("2006-01-02"); got != "2024-01-05" {
+		t.Errorf("firstChange = %q, want 2024-01-05 (pre-rename history preserved)", got)
+	}
+	if got := fe.lastChange.UTC().Format("2006-01-02"); got != "2024-04-15" {
+		t.Errorf("lastChange = %q, want 2024-04-15", got)
+	}
+	// monthChurn must span all 4 months.
+	if len(fe.monthChurn) != 4 {
+		t.Errorf("monthChurn months = %d, want 4", len(fe.monthChurn))
+	}
+	if ds.UniqueFileCount != 1 {
+		t.Errorf("UniqueFileCount = %d, want 1 (canonical)", ds.UniqueFileCount)
+	}
+}
+
+func TestRenameChain(t *testing.T) {
+	// A → B (in c2), B → C (in c3). Canonical = C.
+	jsonl := `{"type":"commit","sha":"c3","author_name":"A","author_email":"a@x","author_date":"2024-03-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"C.go","path_previous":"B.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":10,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	for _, orphan := range []string{"A.go", "B.go"} {
+		if _, ok := ds.files[orphan]; ok {
+			t.Errorf("%s should not exist after chain rename", orphan)
+		}
+	}
+	fe, ok := ds.files["C.go"]
+	if !ok {
+		t.Fatal("C.go missing — chain rename not resolved")
+	}
+	if fe.commits != 3 {
+		t.Errorf("C.go commits = %d, want 3 (A+B+C merged)", fe.commits)
+	}
+}
+
+func TestRenameCollapsesCouplingSelfPair(t *testing.T) {
+	// Two files A.go and B.go co-change in c1. Later c2 renames A→B (both
+	// end up as B.go). The pair {A, B} must NOT survive as a self-pair.
+	jsonl := `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":10,"deletions":0,"files_changed":2}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":5,"deletions":0}
+{"type":"commit_file","commit":"c1","path_current":"B.go","path_previous":"B.go","status":"A","additions":5,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	for pair := range ds.couplingPairs {
+		if pair.a == pair.b {
+			t.Errorf("self-pair survived rename collapse: %+v", pair)
+		}
+	}
+}
+
+func TestRenameDevFilesTouchedUsesCanonical(t *testing.T) {
+	// A single dev edits old.go, then renames it to new.go and edits again.
+	// FilesTouched should be 1 (one canonical file), not 2.
+	jsonl := `{"type":"commit","sha":"c3","author_name":"Alice","author_email":"alice@x","author_date":"2024-03-10T10:00:00Z","additions":2,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"new.go","path_previous":"new.go","status":"M","additions":2,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"Alice","author_email":"alice@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"new.go","path_previous":"old.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"Alice","author_email":"alice@x","author_date":"2024-01-10T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"old.go","path_previous":"old.go","status":"A","additions":5,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	alice := ds.contributors["alice@x"]
+	if alice == nil {
+		t.Fatal("alice missing")
+	}
+	if alice.FilesTouched != 1 {
+		t.Errorf("FilesTouched = %d, want 1 (old.go and new.go collapse to same canonical)", alice.FilesTouched)
+	}
+}
+
+func TestRenameDedupPrefersChronologicallyNewest(t *testing.T) {
+	// Simulate the recreate-then-rename-again scenario. JSONL order is
+	// newest-first, so the newer edge ({A, D}) appears before the older
+	// edge ({A, B}). canonical(A) must resolve to D, not B.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "D"}, // newer rename (seen first)
+		{oldPath: "A", newPath: "B"}, // older rename (should be ignored)
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 1, monthChurn: map[string]int64{}},
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"D": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+	if _, ok := ds.files["B"]; !ok {
+		t.Error("B should survive (it was never renamed away in the newer edge)")
+	}
+	if _, ok := ds.files["D"]; !ok {
+		t.Fatal("D missing — A should have merged into D")
+	}
+	if ds.files["D"].commits != 2 {
+		t.Errorf("D.commits = %d, want 2 (A merged into D)", ds.files["D"].commits)
+	}
+}
+
+func TestRenameCycleDoesNotCrash(t *testing.T) {
+	// Degenerate: A→B then B→A. Canonical resolution should bail out
+	// of the cycle instead of infinite-looping.
+	jsonl := `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"A.go","path_previous":"B.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+`
+	_, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
 	}
 }
 
