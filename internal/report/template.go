@@ -52,23 +52,29 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Merges</div><div class="value">{{.Summary.MergeCommits}}</div></div>
 </div>
 
-<h2>Concentration (Pareto)</h2>
-<p class="hint">How concentrated is the work? Lower % = more concentrated = higher risk if key people/files change.</p>
-<div class="cards">
-  <div class="card">
-    <div class="label">Files → 80% churn</div>
-    <div class="value">{{printf "%.0f" .Pareto.FilesPct80Churn}}%</div>
-    <div class="detail">{{.Pareto.TopChurnFiles}} of {{.Pareto.TotalFiles}} files</div>
+<h2>Concentration</h2>
+<p class="hint">How asymmetric is the work distribution? Fewer items covering 80% = higher concentration = higher risk.</p>
+<div style="display:flex; flex-direction:column; gap:12px; margin-bottom:24px;">
+  <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
+    <span style="font-size:20px;">{{if le .Pareto.FilesPct80Churn 10.0}}🔴{{else if le .Pareto.FilesPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <div>
+      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnFiles}} files concentrate 80% of all churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{if le .Pareto.FilesPct80Churn 10.0}}extremely concentrated, high risk{{else if le .Pareto.FilesPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+    </div>
   </div>
-  <div class="card">
-    <div class="label">Devs → 80% commits</div>
-    <div class="value">{{printf "%.0f" .Pareto.DevsPct80Commits}}%</div>
-    <div class="detail">{{.Pareto.TopCommitDevs}} of {{.Pareto.TotalDevs}} devs</div>
+  <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
+    <span style="font-size:20px;">{{if le .Pareto.DevsPct80Commits 10.0}}🔴{{else if le .Pareto.DevsPct80Commits 25.0}}🟡{{else}}🟢{{end}}</span>
+    <div>
+      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopCommitDevs}} devs produce 80% of all commits</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if le .Pareto.DevsPct80Commits 10.0}}extremely concentrated, key-person risk{{else if le .Pareto.DevsPct80Commits 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+    </div>
   </div>
-  <div class="card">
-    <div class="label">Dirs → 80% churn</div>
-    <div class="value">{{printf "%.0f" .Pareto.DirsPct80Churn}}%</div>
-    <div class="detail">{{.Pareto.TopChurnDirs}} of {{.Pareto.TotalDirs}} dirs</div>
+  <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
+    <span style="font-size:20px;">{{if le .Pareto.DirsPct80Churn 10.0}}🔴{{else if le .Pareto.DirsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <div>
+      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDirs}} directories concentrate 80% of all churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{if le .Pareto.DirsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DirsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+    </div>
   </div>
 </div>
 
