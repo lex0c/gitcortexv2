@@ -177,7 +177,7 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 
 	dirs := make(map[string]*dirAcc)
 	for path, fe := range ds.files {
-		dir := path
+		dir := "."
 		if idx := strings.LastIndex(path, "/"); idx >= 0 {
 			dir = path[:idx]
 		}
