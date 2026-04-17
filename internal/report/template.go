@@ -70,10 +70,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalDevs 0}}⚪{{else if le .Pareto.DevsPct80Churn 10.0}}🔴{{else if le .Pareto.DevsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnDevs 0}}⚪{{else if le .Pareto.DevsPct80Churn 10.0}}🔴{{else if le .Pareto.DevsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDevs}} devs produce 80% of all line churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TotalDevs 0}}no data{{else if le .Pareto.DevsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DevsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}. Compare to the commits card: divergence reveals bots (commits ≫ churn) or feature owners (churn ≫ commits).</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TopChurnDevs 0}}no data{{else if le .Pareto.DevsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DevsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}. Compare to the commits card: divergence reveals bots (commits ≫ churn) or feature owners (churn ≫ commits).</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
