@@ -63,7 +63,7 @@ footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #d0d7de; col
   <div>
     <span style="color:#656d76;">Contribution:</span>
     {{if eq .Profile.ContribType "growth"}}<span style="color:#2da44e; font-weight:600;">growth</span>{{else if eq .Profile.ContribType "refactor"}}<span style="color:#cf222e; font-weight:600;">refactor</span>{{else}}<span style="color:#bf8700; font-weight:600;">balanced</span>{{end}}
-    <span style="color:#656d76;">({{printf "%.2f" .Profile.ContribRatio}} �� +{{.Profile.Additions}} −{{.Profile.Deletions}})</span>
+    <span style="color:#656d76;">(ratio {{printf "%.2f" .Profile.ContribRatio}} · +{{.Profile.Additions}} −{{.Profile.Deletions}})</span>
   </div>
 </div>
 
