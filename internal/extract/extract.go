@@ -385,10 +385,18 @@ func shouldIgnore(path string, patterns []string) bool {
 		return false
 	}
 	for _, pattern := range patterns {
+		// Basename match: "*.min.js" matches "dist/app.min.js"
 		if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
 			return true
 		}
+		// Full path match: "src/generated/*.go" matches "src/generated/types.go"
 		if matched, _ := filepath.Match(pattern, path); matched {
+			return true
+		}
+		// Directory prefix: "dist/*" or "dist/" matches "dist/foo/bar.js"
+		prefix := strings.TrimSuffix(pattern, "*")
+		prefix = strings.TrimSuffix(prefix, "/")
+		if prefix != "" && prefix != pattern && strings.HasPrefix(path, prefix+"/") {
 			return true
 		}
 	}

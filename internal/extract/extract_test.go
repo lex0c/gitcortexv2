@@ -112,7 +112,11 @@ func TestShouldIgnore(t *testing.T) {
 		{"src/main.go", []string{"package-lock.json"}, false},
 		{"dist/app.min.js", []string{"*.min.js"}, true},
 		{"src/app.js", []string{"*.min.js"}, false},
-		{"vendor/lib/foo.go", []string{"vendor/*"}, false},  // only matches basename or full path
+		{"vendor/lib/foo.go", []string{"vendor/*"}, true},   // directory prefix match
+		{"vendor/foo.go", []string{"vendor/*"}, true},       // direct child
+		{"src/vendor/foo.go", []string{"vendor/*"}, false},  // not a prefix
+		{"dist/js/app.js", []string{"dist/"}, true},         // trailing slash
+		{"dist/deep/nested/f.js", []string{"dist/*"}, true}, // deep nested
 		{"go.sum", []string{"go.sum", "go.mod"}, true},
 		{"go.mod", []string{"go.sum", "go.mod"}, true},
 		{"readme.md", []string{"*.md"}, true},
