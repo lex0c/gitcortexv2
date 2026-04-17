@@ -44,7 +44,7 @@ type ParetoData struct {
 	TotalDirs         int
 }
 
-func computePareto(ds *stats.Dataset) ParetoData {
+func ComputePareto(ds *stats.Dataset) ParetoData {
 	p := ParetoData{}
 
 	// Files: % of files for 80% of churn (FileHotspots returns sorted by commits, re-sort by churn)
@@ -208,7 +208,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		TopCommits:         stats.TopCommits(ds, topN),
 		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
 		Profiles:           stats.DevProfiles(ds, ""),
-		Pareto:             computePareto(ds),
+		Pareto:             ComputePareto(ds),
 		PatternGrid:        grid,
 		MaxPattern:         maxP,
 	}

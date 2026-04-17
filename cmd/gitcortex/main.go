@@ -13,7 +13,7 @@ import (
 
 	"github.com/lex0c/gitcortex/internal/extract"
 	"github.com/lex0c/gitcortex/internal/git"
-	"github.com/lex0c/gitcortex/internal/report"
+	reportpkg "github.com/lex0c/gitcortex/internal/report"
 	"github.com/lex0c/gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
@@ -105,7 +105,7 @@ func isValidStat(s string) bool {
 	switch s {
 	case "summary", "contributors", "hotspots", "directories", "activity",
 		"busfactor", "coupling", "churn-risk", "working-patterns",
-		"dev-network", "profile", "top-commits":
+		"dev-network", "profile", "top-commits", "pareto":
 		return true
 	}
 	return false
@@ -147,7 +147,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto", sf.stat)
 	}
 	return nil
 }
@@ -266,6 +266,21 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if showAll || sf.stat == "pareto" {
+		fmt.Fprintln(os.Stderr, "\n=== Concentration (Pareto) ===")
+		p := reportpkg.ComputePareto(ds)
+		judge := func(pct float64) string {
+			if pct <= 10 {
+				return "extremely concentrated"
+			} else if pct <= 25 {
+				return "moderately concentrated"
+			}
+			return "well distributed"
+		}
+		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn))
+		fmt.Fprintf(os.Stdout, "Devs:   %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, judge(p.DevsPct80Commits))
+		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn))
+	}
 	if showAll || sf.stat == "top-commits" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Commits ===\n", sf.topN)
 		if err := f.PrintTopCommits(stats.TopCommits(ds, sf.topN)); err != nil {
@@ -312,6 +327,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if sf.stat == "profile" {
 		report["profiles"] = stats.DevProfiles(ds, sf.email)
+	}
+	if showAll || sf.stat == "pareto" {
+		report["pareto"] = reportpkg.ComputePareto(ds)
 	}
 	if showAll || sf.stat == "top-commits" {
 		report["top_commits"] = stats.TopCommits(ds, sf.topN)
@@ -671,12 +689,12 @@ func reportCmd() *cobra.Command {
 			}
 
 			if email != "" {
-				if err := report.GenerateProfile(f, ds, repoName, email); err != nil {
+				if err := reportpkg.GenerateProfile(f, ds, repoName, email); err != nil {
 					return fmt.Errorf("generate profile: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, output)
 			} else {
-				if err := report.Generate(f, ds, repoName, topN, sf); err != nil {
+				if err := reportpkg.Generate(f, ds, repoName, topN, sf); err != nil {
 					return fmt.Errorf("generate report: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", output, ds.CommitCount, ds.DevCount)
