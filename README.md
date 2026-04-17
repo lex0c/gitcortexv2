@@ -14,6 +14,10 @@ Benchmarked on open-source repositories (bare clones):
 | [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
 | [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | 13m 12s | 1,816/s | 6M lines |
 
+## Privacy and reliability
+
+All processing is **100% local**. No external services, no network calls, no AI, no telemetry. gitcortex reads only git metadata (commits, authors, dates, file paths, line counts) — it never reads source code content. Commit messages are excluded by default and only included with `--include-commit-messages`. Data stays on your machine as a JSONL file that you control.
+
 ## Install
 
 ```bash
