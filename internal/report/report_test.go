@@ -213,10 +213,15 @@ func TestComputePareto(t *testing.T) {
 	}
 
 	// Percentages must be in [0, 100].
-	for _, v := range []float64{p.FilesPct80Churn, p.DevsPct80Commits, p.DirsPct80Churn} {
+	for _, v := range []float64{p.FilesPct80Churn, p.DevsPct80Commits, p.DevsPct80Churn, p.DirsPct80Churn} {
 		if v < 0 || v > 100 {
 			t.Errorf("pct out of range: %.1f", v)
 		}
+	}
+
+	// DevsPct80Churn should also be populated (fixture has non-zero churn).
+	if p.TopChurnDevs == 0 {
+		t.Errorf("TopChurnDevs = 0, want > 0 (devs have non-zero churn in fixture)")
 	}
 }
 

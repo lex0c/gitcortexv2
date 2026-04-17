@@ -285,7 +285,8 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			devsLabel += ", key-person dependence"
 		}
 		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn, p.TotalFiles))
-		fmt.Fprintf(os.Stdout, "Devs:   %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
+		fmt.Fprintf(os.Stdout, "Devs (commits): %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
+		fmt.Fprintf(os.Stdout, "Devs (churn):   %d of %d devs produce 80%% of line churn — %s\n", p.TopChurnDevs, p.TotalDevs, judge(p.DevsPct80Churn, p.TotalDevs))
 		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn, p.TotalDirs))
 	}
 	if showAll || sf.stat == "top-commits" {

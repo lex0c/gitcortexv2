@@ -37,10 +37,12 @@ type ReportData struct {
 type ParetoData struct {
 	FilesPct80Churn   float64 // % of files that account for 80% of churn
 	DevsPct80Commits  float64 // % of devs that account for 80% of commits
+	DevsPct80Churn    float64 // % of devs that account for 80% of churn (complements commits; diverges when bots commit frequently or single authors write large features)
 	DirsPct80Churn    float64 // % of dirs that account for 80% of churn
 	TopChurnFiles     int
 	TotalFiles        int
 	TopCommitDevs     int
+	TopChurnDevs      int
 	TotalDevs         int
 	TopChurnDirs      int
 	TotalDirs         int
@@ -70,13 +72,17 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 		p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
 	}
 
-	// Devs: % of devs for 80% of commits
+	// Devs: two complementary lenses.
+	// - 80% of commits: rewards frequent committers (bots, squash-off teams).
+	// - 80% of churn:   rewards volume of lines written/removed.
+	// Divergence between the two is informative (bot author vs feature author).
 	contribs := stats.TopContributors(ds, 0)
+	p.TotalDevs = len(contribs)
+
 	var totalCommits int
 	for _, c := range contribs {
 		totalCommits += c.Commits
 	}
-	p.TotalDevs = len(contribs)
 	commitThreshold := float64(totalCommits) * 0.8
 	var cumCommits int
 	for _, c := range contribs {
@@ -88,6 +94,35 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	}
 	if p.TotalDevs > 0 {
 		p.DevsPct80Commits = math.Round(float64(p.TopCommitDevs) / float64(p.TotalDevs) * 1000) / 10
+	}
+
+	// Dev churn ranking: re-sort contribs by lines changed, apply same 80%
+	// cumulative cutoff. Tiebreaker on email asc for determinism.
+	byChurn := make([]stats.ContributorStat, len(contribs))
+	copy(byChurn, contribs)
+	sort.Slice(byChurn, func(i, j int) bool {
+		li := byChurn[i].Additions + byChurn[i].Deletions
+		lj := byChurn[j].Additions + byChurn[j].Deletions
+		if li != lj {
+			return li > lj
+		}
+		return byChurn[i].Email < byChurn[j].Email
+	})
+	var totalDevChurn int64
+	for _, c := range byChurn {
+		totalDevChurn += c.Additions + c.Deletions
+	}
+	devChurnThreshold := float64(totalDevChurn) * 0.8
+	var cumDevChurn int64
+	for _, c := range byChurn {
+		cumDevChurn += c.Additions + c.Deletions
+		p.TopChurnDevs++
+		if float64(cumDevChurn) >= devChurnThreshold {
+			break
+		}
+	}
+	if p.TotalDevs > 0 && totalDevChurn > 0 {
+		p.DevsPct80Churn = math.Round(float64(p.TopChurnDevs) / float64(p.TotalDevs) * 1000) / 10
 	}
 
 	// Dirs: % of dirs for 80% of churn
