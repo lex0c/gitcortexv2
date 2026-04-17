@@ -53,9 +53,10 @@ Filter out generated files, lock files, or vendored code:
 ```bash
 ./gitcortex extract --repo /path/to/repo --ignore package-lock.json --ignore yarn.lock
 ./gitcortex extract --repo /path/to/repo --ignore "*.min.js" --ignore "*.generated.go"
+./gitcortex extract --repo /path/to/repo --ignore "dist/*" --ignore "vendor/*"
 ```
 
-Matches against the filename (`package-lock.json`) and the full path. Uses glob patterns (not regex). Commit additions/deletions are recalculated without the ignored files.
+Matches against filename (`package-lock.json`), full path, and directory prefix (`dist/*`, `vendor/`). Uses glob patterns (not regex). Commit additions/deletions are recalculated without the ignored files.
 
 ### Include commit messages
 

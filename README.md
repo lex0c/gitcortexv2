@@ -69,6 +69,9 @@ gitcortex extract --repo /path/to/repo --mailmap
 
 # Exclude files from extraction
 gitcortex extract --repo /path/to/repo --ignore package-lock.json --ignore "*.min.js"
+
+# Exclude entire directories
+gitcortex extract --repo /path/to/repo --ignore "dist/*" --ignore "vendor/*"
 ```
 
 The default branch is auto-detected from `origin/HEAD`, falling back to `main`, `master`, or `HEAD`.
