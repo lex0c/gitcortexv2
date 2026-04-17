@@ -79,8 +79,9 @@ File pairs that frequently change in the same commit.
 
 **Calculation**:
 1. For each commit with 2-N files (skipping single-file commits and commits with >50 files by default), generate all file pairs
-2. Count co-occurrences per pair
-3. Coupling % = co-changes / min(changes_A, changes_B) × 100
+2. Exclude pairs from **mechanical-refactor commits**: a commit touching ≥ `refactorMinFiles` (10) with mean per-file churn < `refactorMaxChurnPerFile` (5 lines) is treated as a global rename / format / lint fix, and its pairs are skipped. The files' individual change counts (`changes_A`, `changes_B`) still include these commits — only the pair accumulation is suppressed.
+3. Count co-occurrences per pair
+4. Coupling % = co-changes / min(changes_A, changes_B) × 100
 
 | Column | Meaning |
 |--------|---------|
@@ -94,6 +95,8 @@ File pairs that frequently change in the same commit.
 - Unrelated modules at 50%+: hidden dependency, refactoring opportunity
 
 Based on Adam Tornhill's ["Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) methodology.
+
+> **Caveat — co-change is not causation.** Two files changing in the same commit proves they were touched by the same unit of work, not that one depends on the other. The refactor filter catches the most blatant false positives (global renames, format passes) but not all — a genuinely large feature touching many related files can still leak pair counts. Treat high coupling % as a hypothesis worth investigating, not a proof of architectural dependency.
 
 ## Churn Risk
 
@@ -257,6 +260,8 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `classifyTrendWindowMonths` | `3` | Window (months, relative to latest commit) for the recent vs earlier split in `trend`. |
 | `contribRefactorRatio` | `0.8` | `del/add ≥ this` → dev profile `contribType = refactor`. |
 | `contribBalancedRatio` | `0.4` | `0.4 ≤ del/add < 0.8` → `balanced`; below 0.4 → `growth`. |
+| `refactorMinFiles` | `10` | Minimum files for a commit to be a mechanical-refactor candidate (coupling filter). |
+| `refactorMaxChurnPerFile` | `5.0` | Mean churn per file below this in a candidate commit → treated as refactor; its pairs are excluded from coupling. |
 
 ### Reproducibility
 

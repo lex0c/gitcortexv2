@@ -163,6 +163,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 	// Coupling streaming state
 	var coupCurrentSHA string
 	var coupCurrentFiles []string
+	var coupCurrentChurn int64
 
 	dayIndex := map[time.Weekday]int{
 		time.Monday: 0, time.Tuesday: 1, time.Wednesday: 2,
@@ -348,11 +349,13 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 
 			// Coupling: streaming pair computation
 			if cf.Commit != coupCurrentSHA {
-				flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+				flushCoupling(ds, coupCurrentFiles, coupCurrentChurn, opt.CoupMaxFiles)
 				coupCurrentSHA = cf.Commit
 				coupCurrentFiles = coupCurrentFiles[:0]
+				coupCurrentChurn = 0
 			}
 			coupCurrentFiles = append(coupCurrentFiles, path)
+			coupCurrentChurn += cf.Additions + cf.Deletions
 
 		case model.DevType:
 			// dev records are skipped — DevCount is derived from contributors (authors only)
@@ -363,7 +366,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 		return fmt.Errorf("read: %w", err)
 	}
 
-	flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+	flushCoupling(ds, coupCurrentFiles, coupCurrentChurn, opt.CoupMaxFiles)
 	ds.UniqueFileCount += len(uniqueFiles)
 
 	return nil
@@ -517,7 +520,7 @@ func mergeFileEntry(dst, src *fileEntry) {
 	}
 }
 
-func flushCoupling(ds *Dataset, files []string, maxFiles int) {
+func flushCoupling(ds *Dataset, files []string, commitChurn int64, maxFiles int) {
 	// Always count file changes (denominator for coupling %)
 	// so single-file commits are included in the base rate.
 	seen := make(map[string]bool, len(files))
@@ -533,6 +536,17 @@ func flushCoupling(ds *Dataset, files []string, maxFiles int) {
 	// Only count pairs for multi-file commits within size limit
 	if len(unique) < 2 || len(unique) > maxFiles {
 		return
+	}
+
+	// Mechanical-refactor heuristic: many files, very low mean churn per
+	// file. Global renames and format-only commits match this pattern and
+	// would otherwise generate spurious coupling pairs. Skip pair counting
+	// but keep the denominator already incremented above.
+	if len(unique) >= refactorMinFiles {
+		meanChurn := float64(commitChurn) / float64(len(unique))
+		if meanChurn < refactorMaxChurnPerFile {
+			return
+		}
 	}
 
 	for i := 0; i < len(unique); i++ {

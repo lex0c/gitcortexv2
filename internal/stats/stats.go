@@ -22,6 +22,15 @@ const (
 	// Developer profile contribution type (del/add ratio)
 	contribRefactorRatio = 0.8 // ratio ≥ 0.8 → refactor
 	contribBalancedRatio = 0.4 // 0.4 ≤ ratio < 0.8 → balanced; else growth
+
+	// Coupling — mechanical refactor heuristic. A commit touching many
+	// files with very low mean churn per file is almost always a rename,
+	// format, or lint fix, not meaningful co-change. Pairs from such
+	// commits are excluded to reduce false coupling. Denominators
+	// (couplingFileChanges) are still counted so ChangesA/ChangesB
+	// remain honest totals.
+	refactorMinFiles        = 10
+	refactorMaxChurnPerFile = 5.0
 )
 
 type ContributorStat struct {

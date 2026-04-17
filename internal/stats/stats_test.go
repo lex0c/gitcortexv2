@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -651,6 +652,73 @@ func TestStreamLoadCoupling(t *testing.T) {
 	pair := filePair{a: "x.go", b: "y.go"}
 	if ds.couplingPairs[pair] != 2 {
 		t.Errorf("coupling pair count = %d, want 2", ds.couplingPairs[pair])
+	}
+}
+
+func TestCouplingExcludesMechanicalRefactor(t *testing.T) {
+	// A commit touching 10 files with ~1 line each (a rename or format pass)
+	// would generate 45 coupling pairs and swamp the real signal. The heuristic
+	// skips pair accumulation for such commits.
+	var lines []string
+	// c1: mechanical refactor — 10 files, 1 line each, mean churn = 1 < 5
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":10,"deletions":0,"files_changed":10}`)
+	for i := 0; i < 10; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"f%d.go","status":"M","additions":1,"deletions":0}`, i))
+	}
+	// c2: real multi-file change — 3 files, 100 lines each
+	lines = append(lines, `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-01-02T10:00:00Z","additions":300,"deletions":0,"files_changed":3}`)
+	for i := 0; i < 3; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c2","path_current":"f%d.go","status":"M","additions":100,"deletions":0}`, i))
+	}
+	jsonl := strings.Join(lines, "\n") + "\n"
+
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// c1 must NOT contribute pairs, c2 must. For files f0..f2 the only pair
+	// counts should come from c2 (3 pairs: {f0,f1}, {f0,f2}, {f1,f2}).
+	for pair, count := range ds.couplingPairs {
+		if count > 1 {
+			t.Errorf("pair %v has count %d — mechanical refactor leaked into coupling", pair, count)
+		}
+	}
+	p01 := filePair{a: "f0.go", b: "f1.go"}
+	if ds.couplingPairs[p01] != 1 {
+		t.Errorf("pair {f0,f1} count = %d, want 1 (only c2 contributes)", ds.couplingPairs[p01])
+	}
+
+	// But file-change denominators MUST still include c1 — those are honest
+	// counts of how often each file appears, not a coupling signal.
+	if ds.couplingFileChanges["f0.go"] != 2 {
+		t.Errorf("f0.go changes = %d, want 2 (c1 + c2, even though c1 didn't contribute pairs)",
+			ds.couplingFileChanges["f0.go"])
+	}
+	if ds.couplingFileChanges["f9.go"] != 1 {
+		t.Errorf("f9.go changes = %d, want 1", ds.couplingFileChanges["f9.go"])
+	}
+}
+
+func TestCouplingKeepsNormalMultiFileCommits(t *testing.T) {
+	// Counter-test: a commit touching 10 files with substantial churn per
+	// file (40+ lines avg) must still contribute pairs — it's not a rename.
+	var lines []string
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":500,"deletions":0,"files_changed":10}`)
+	for i := 0; i < 10; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"g%d.go","status":"M","additions":50,"deletions":0}`, i))
+	}
+	ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+		LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	// 10 choose 2 = 45 pairs
+	if got := len(ds.couplingPairs); got != 45 {
+		t.Errorf("coupling pairs = %d, want 45 (substantial per-file churn, should not trigger refactor filter)", got)
 	}
 }
 
