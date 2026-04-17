@@ -169,6 +169,163 @@ func TestBusFactor(t *testing.T) {
 	}
 }
 
+// makeTiesDataset builds a dataset where every primary sort key ties, so
+// only tiebreakers determine ordering. Used to guard against non-determinism
+// regressions across every sort function in the package.
+func makeTiesDataset() *Dataset {
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	ds := &Dataset{
+		CommitCount: 6,
+		Earliest:    t1,
+		Latest:      t1,
+		commits: map[string]*commitEntry{
+			"sha1": {email: "dev-a@x", date: t1, add: 10, del: 5, files: 1},
+			"sha2": {email: "dev-b@x", date: t1, add: 10, del: 5, files: 1},
+			"sha3": {email: "dev-c@x", date: t1, add: 10, del: 5, files: 1},
+			"sha4": {email: "dev-d@x", date: t1, add: 10, del: 5, files: 1},
+			"sha5": {email: "dev-e@x", date: t1, add: 10, del: 5, files: 1},
+			"sha6": {email: "dev-f@x", date: t1, add: 10, del: 5, files: 1},
+		},
+		contributors: map[string]*ContributorStat{
+			"dev-a@x": {Email: "dev-a@x", Name: "A", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-b@x": {Email: "dev-b@x", Name: "B", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-c@x": {Email: "dev-c@x", Name: "C", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-d@x": {Email: "dev-d@x", Name: "D", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-e@x": {Email: "dev-e@x", Name: "E", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-f@x": {Email: "dev-f@x", Name: "F", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+		},
+		files: map[string]*fileEntry{
+			"a/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-a@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"a/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-b@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"b/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-c@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"b/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-d@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"c/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-e@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"c/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-f@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+		},
+		couplingPairs:       map[filePair]int{},
+		couplingFileChanges: map[string]int{},
+	}
+	return ds
+}
+
+// TestAllSortsDeterministicUnderTies ensures every sort function in the
+// package produces identical ordering across runs when the primary sort key
+// ties. Without tiebreakers, Go map iteration order + unstable sort.Slice
+// cause the CLI and the HTML report to show different top-N entries. This
+// test guards every function that ranks results.
+func TestAllSortsDeterministicUnderTies(t *testing.T) {
+	ds := makeTiesDataset()
+
+	identify := func(v interface{}) []string {
+		switch r := v.(type) {
+		case []BusFactorResult:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Path
+			}
+			return out
+		case []FileStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Path
+			}
+			return out
+		case []ContributorStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Email
+			}
+			return out
+		case []DirStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Dir
+			}
+			return out
+		case []BigCommit:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.SHA
+			}
+			return out
+		case []DevProfile:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Email
+			}
+			return out
+		}
+		t.Fatalf("unknown type: %T", v)
+		return nil
+	}
+
+	cases := []struct {
+		name string
+		run  func() []string
+	}{
+		{"BusFactor", func() []string { return identify(BusFactor(ds, 0)) }},
+		{"FileHotspots", func() []string { return identify(FileHotspots(ds, 0)) }},
+		{"TopContributors", func() []string { return identify(TopContributors(ds, 0)) }},
+		{"DirectoryStats", func() []string { return identify(DirectoryStats(ds, 0)) }},
+		{"TopCommits", func() []string { return identify(TopCommits(ds, 0)) }},
+		{"DevProfiles", func() []string { return identify(DevProfiles(ds, "")) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			first := c.run()
+			if len(first) < 2 {
+				t.Fatalf("fixture produced too few entries (%d) — need ties to exercise tiebreakers", len(first))
+			}
+			for i := 0; i < 20; i++ {
+				got := c.run()
+				for j := range got {
+					if j >= len(first) || got[j] != first[j] {
+						t.Fatalf("iteration %d: non-deterministic at index %d (got %q, first run had %q)",
+							i, j, got[j], first[j])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBusFactorOrderDeterministicUnderTies(t *testing.T) {
+	// 6 files, all with bus factor = 1. Without a deterministic tiebreaker
+	// the top-N varies between invocations because Go map iteration is
+	// randomized. The CLI and HTML report call BusFactor separately and
+	// must return the same ordering — this test guards against regression.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"z/last.go":  {commits: 1, devLines: map[string]int64{"a@x": 10}},
+			"a/first.go": {commits: 1, devLines: map[string]int64{"b@x": 10}},
+			"m/mid.go":   {commits: 1, devLines: map[string]int64{"c@x": 10}},
+			"a/second.go": {commits: 1, devLines: map[string]int64{"d@x": 10}},
+			"b/one.go":   {commits: 1, devLines: map[string]int64{"e@x": 10}},
+			"b/two.go":   {commits: 1, devLines: map[string]int64{"f@x": 10}},
+		},
+	}
+	first := BusFactor(ds, 3)
+	// Run 20 times; order must be identical every time.
+	for i := 0; i < 20; i++ {
+		run := BusFactor(ds, 3)
+		for j := range run {
+			if run[j].Path != first[j].Path {
+				t.Fatalf("iteration %d index %d: got %q, want %q",
+					i, j, run[j].Path, first[j].Path)
+			}
+		}
+	}
+	// Expected ordering: all bf=1, so tiebreaker is path asc.
+	want := []string{"a/first.go", "a/second.go", "b/one.go"}
+	for i, p := range want {
+		if first[i].Path != p {
+			t.Errorf("[%d] got %q, want %q", i, first[i].Path, p)
+		}
+	}
+}
+
 func TestBusFactorSingleDev(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{

@@ -147,8 +147,12 @@ func TopContributors(ds *Dataset, n int) []ContributorStat {
 		result = append(result, *cs)
 	}
 
+	// Deterministic ordering under ties: commits desc, then email asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Commits > result[j].Commits
+		if result[i].Commits != result[j].Commits {
+			return result[i].Commits > result[j].Commits
+		}
+		return result[i].Email < result[j].Email
 	})
 
 	if n > 0 && n < len(result) {
@@ -170,8 +174,12 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 		})
 	}
 
+	// Deterministic ordering under ties: commits desc, then path asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Commits > result[j].Commits
+		if result[i].Commits != result[j].Commits {
+			return result[i].Commits > result[j].Commits
+		}
+		return result[i].Path < result[j].Path
 	})
 
 	if n > 0 && n < len(result) {
@@ -257,7 +265,13 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool { return result[i].FileTouches > result[j].FileTouches })
+	// Deterministic ordering under ties: file touches desc, then dir asc.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].FileTouches != result[j].FileTouches {
+			return result[i].FileTouches > result[j].FileTouches
+		}
+		return result[i].Dir < result[j].Dir
+	})
 	if n > 0 && n < len(result) {
 		result = result[:n]
 	}
@@ -352,8 +366,14 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 		})
 	}
 
+	// Deterministic ordering under ties: bus factor asc, then path asc.
+	// Ties on bf=1 are universal in real repos; without a tiebreaker the
+	// top-N varies between invocations (map iteration order is random).
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].BusFactor < result[j].BusFactor
+		if result[i].BusFactor != result[j].BusFactor {
+			return result[i].BusFactor < result[j].BusFactor
+		}
+		return result[i].Path < result[j].Path
 	})
 
 	if n > 0 && n < len(result) {
@@ -596,8 +616,12 @@ func TopCommits(ds *Dataset, n int) []BigCommit {
 		})
 	}
 
+	// Deterministic ordering under ties: lines desc, then SHA asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].LinesChanged > result[j].LinesChanged
+		if result[i].LinesChanged != result[j].LinesChanged {
+			return result[i].LinesChanged > result[j].LinesChanged
+		}
+		return result[i].SHA < result[j].SHA
 	})
 
 	if n > 0 && n < len(result) {
@@ -827,8 +851,12 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		})
 	}
 
+	// Deterministic ordering under ties: commits desc, then email asc.
 	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Commits > profiles[j].Commits
+		if profiles[i].Commits != profiles[j].Commits {
+			return profiles[i].Commits > profiles[j].Commits
+		}
+		return profiles[i].Email < profiles[j].Email
 	})
 
 	return profiles
