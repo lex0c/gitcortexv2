@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"gitcortex/internal/git"
-	"gitcortex/internal/model"
+	"github.com/lex0c/gitcortexv2/internal/git"
+	"github.com/lex0c/gitcortexv2/internal/model"
 )
 
 const DefaultCommandTimeout = 2 * time.Minute

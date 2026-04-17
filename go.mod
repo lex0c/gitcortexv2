@@ -1,4 +1,4 @@
-module gitcortex
+module github.com/lex0c/gitcortexv2
 
 go 1.26.1
 

@@ -10,18 +10,21 @@ import (
 	"strings"
 	"syscall"
 
-	"gitcortex/internal/extract"
-	"gitcortex/internal/git"
-	"gitcortex/internal/report"
-	"gitcortex/internal/stats"
+	"github.com/lex0c/gitcortexv2/internal/extract"
+	"github.com/lex0c/gitcortexv2/internal/git"
+	"github.com/lex0c/gitcortexv2/internal/report"
+	"github.com/lex0c/gitcortexv2/internal/stats"
 
 	"github.com/spf13/cobra"
 )
 
+var version = "dev"
+
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "gitcortex",
-		Short: "Git metrics extraction and analysis",
+		Use:     "gitcortex",
+		Short:   "Git metrics extraction and analysis",
+		Version: version,
 	}
 
 	rootCmd.AddCommand(extractCmd())

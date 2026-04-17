@@ -17,13 +17,13 @@ Benchmarked on open-source repositories (bare clones):
 ## Install
 
 ```bash
-go install gitcortex/cmd/gitcortex@latest
+go install github.com/lex0c/gitcortexv2/cmd/gitcortex@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/your-org/gitcortex.git
+git clone https://github.com/lex0c/gitcortexv2.git
 cd gitcortex
 make build
 ```
