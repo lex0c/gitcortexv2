@@ -30,7 +30,9 @@ make build
 
 Other targets: `make test`, `make vet`, `make check` (vet + test), `make install`, `make clean`.
 
-Requires Git 2.31+ and Go 1.21+.
+Check version: `gitcortex --version`
+
+Requires Git 2.31+ and Go 1.21+. CI runs automatically on push/PR via GitHub Actions.
 
 ## Usage
 
