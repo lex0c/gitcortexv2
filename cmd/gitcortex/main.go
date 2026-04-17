@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lex0c/gitcortex/internal/extract"
 	"github.com/lex0c/gitcortex/internal/git"
@@ -116,6 +117,7 @@ type statsFlags struct {
 	topN               int
 	granularity        string
 	stat               string
+	since              string
 	couplingMaxFiles   int
 	couplingMinChanges int
 	churnHalfLife      int
@@ -134,6 +136,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
 	cmd.Flags().IntVar(&sf.networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
 	cmd.Flags().StringVar(&sf.email, "email", "", "Filter by developer email (for profile stat)")
+	cmd.Flags().StringVar(&sf.since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
 }
 
 func validateStatsFlags(sf *statsFlags) error {
@@ -160,7 +163,13 @@ func statsCmd() *cobra.Command {
 				return err
 			}
 
+			sinceDate, err := parseSince(sf.since)
+			if err != nil {
+				return err
+			}
+
 			ds, err := stats.LoadMultiJSONL(sf.inputs, stats.LoadOptions{
+				From:         sinceDate,
 				HalfLifeDays: sf.churnHalfLife,
 				CoupMaxFiles: sf.couplingMaxFiles,
 			})
@@ -556,6 +565,45 @@ func printCIJSON(violations []ciViolation) {
 	enc.Encode(violations)
 }
 
+func parseSince(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	if len(s) < 2 {
+		return "", fmt.Errorf("invalid --since %q; use e.g. 7d, 4w, 3m, 1y", s)
+	}
+	numStr := s[:len(s)-1]
+	unit := s[len(s)-1]
+
+	n := 0
+	for _, c := range numStr {
+		if c < '0' || c > '9' {
+			return "", fmt.Errorf("invalid --since %q; use e.g. 7d, 4w, 3m, 1y", s)
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 {
+		return "", fmt.Errorf("invalid --since %q; number must be positive", s)
+	}
+
+	now := time.Now()
+	var from time.Time
+	switch unit {
+	case 'd':
+		from = now.AddDate(0, 0, -n)
+	case 'w':
+		from = now.AddDate(0, 0, -n*7)
+	case 'm':
+		from = now.AddDate(0, -n, 0)
+	case 'y':
+		from = now.AddDate(-n, 0, 0)
+	default:
+		return "", fmt.Errorf("invalid --since unit %q; use d (days), w (weeks), m (months), y (years)", string(unit))
+	}
+
+	return from.Format("2006-01-02"), nil
+}
+
 func absPath(p string) string {
 	a, err := filepath.Abs(p)
 	if err != nil {
@@ -572,6 +620,7 @@ func reportCmd() *cobra.Command {
 		output             string
 		topN               int
 		email              string
+		since              string
 		couplingMaxFiles   int
 		couplingMinChanges int
 		churnHalfLife      int
@@ -582,7 +631,13 @@ func reportCmd() *cobra.Command {
 		Use:   "report",
 		Short: "Generate a self-contained HTML report",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sinceDate, err := parseSince(since)
+			if err != nil {
+				return err
+			}
+
 			ds, err := stats.LoadJSONL(input, stats.LoadOptions{
+				From:         sinceDate,
 				HalfLifeDays: churnHalfLife,
 				CoupMaxFiles: couplingMaxFiles,
 			})
@@ -629,6 +684,7 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling")
 	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay")
 	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
+	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
 
 	return cmd
 }
