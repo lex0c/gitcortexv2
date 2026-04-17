@@ -554,7 +554,7 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			if devFiles[email] == nil {
 				devFiles[email] = make(map[string]*fileAcc)
 			}
-			devFiles[email][path] = &fileAcc{commits: fe.commits, churn: lines}
+			devFiles[email][path] = &fileAcc{commits: fe.devCommits[email], churn: lines}
 		}
 	}
 

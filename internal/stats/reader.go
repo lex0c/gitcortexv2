@@ -28,6 +28,7 @@ type fileEntry struct {
 	additions   int64
 	deletions   int64
 	devLines    map[string]int64
+	devCommits  map[string]int
 	recentChurn float64
 	lastChange  time.Time
 }
@@ -280,7 +281,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			// File aggregation (hotspots + busfactor + churn-risk)
 			fe, ok := ds.files[path]
 			if !ok {
-				fe = &fileEntry{devLines: make(map[string]int64)}
+				fe = &fileEntry{devLines: make(map[string]int64), devCommits: make(map[string]int)}
 				ds.files[path] = fe
 			}
 			fe.commits++
@@ -290,6 +291,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			cm := ds.commits[cf.Commit]
 			if cm != nil {
 				fe.devLines[cm.email] += cf.Additions + cf.Deletions
+				fe.devCommits[cm.email]++
 
 				// Contributor files touched
 				if ds.contribFiles[cm.email] == nil {
