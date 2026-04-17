@@ -6,7 +6,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/lex0c/gitcortexv2/internal/stats"
+	"github.com/lex0c/gitcortex/internal/stats"
 )
 
 type ReportData struct {

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/lex0c/gitcortexv2/internal/extract"
-	"github.com/lex0c/gitcortexv2/internal/git"
-	"github.com/lex0c/gitcortexv2/internal/report"
-	"github.com/lex0c/gitcortexv2/internal/stats"
+	"github.com/lex0c/gitcortex/internal/extract"
+	"github.com/lex0c/gitcortex/internal/git"
+	"github.com/lex0c/gitcortex/internal/report"
+	"github.com/lex0c/gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
 )

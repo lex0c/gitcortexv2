@@ -56,7 +56,7 @@ The release is created automatically with:
 - All 5 binaries attached as downloadable assets
 - Auto-generated release notes from commit messages since the last tag
 
-Users download from: `https://github.com/lex0c/gitcortexv2/releases/latest`
+Users download from: `https://github.com/lex0c/gitcortex/releases/latest`
 
 ## Install methods
 
@@ -64,12 +64,12 @@ Users download from: `https://github.com/lex0c/gitcortexv2/releases/latest`
 
 ```bash
 # Linux
-curl -L https://github.com/lex0c/gitcortexv2/releases/latest/download/gitcortex-linux-amd64 -o gitcortex
+curl -L https://github.com/lex0c/gitcortex/releases/latest/download/gitcortex-linux-amd64 -o gitcortex
 chmod +x gitcortex
 sudo mv gitcortex /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -L https://github.com/lex0c/gitcortexv2/releases/latest/download/gitcortex-darwin-arm64 -o gitcortex
+curl -L https://github.com/lex0c/gitcortex/releases/latest/download/gitcortex-darwin-arm64 -o gitcortex
 chmod +x gitcortex
 sudo mv gitcortex /usr/local/bin/
 ```
@@ -77,14 +77,14 @@ sudo mv gitcortex /usr/local/bin/
 ### From source (Go required)
 
 ```bash
-go install github.com/lex0c/gitcortexv2/cmd/gitcortex@latest
+go install github.com/lex0c/gitcortex/cmd/gitcortex@latest
 ```
 
 ### From repo
 
 ```bash
-git clone https://github.com/lex0c/gitcortexv2.git
-cd gitcortexv2
+git clone https://github.com/lex0c/gitcortex.git
+cd gitcortex
 make build
 ```
 

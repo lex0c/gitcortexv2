@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lex0c/gitcortexv2/internal/model"
+	"github.com/lex0c/gitcortex/internal/model"
 )
 
 type commitEntry struct {
