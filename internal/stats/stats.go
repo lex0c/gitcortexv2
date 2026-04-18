@@ -698,7 +698,8 @@ type DirScope struct {
 
 type DevCollaborator struct {
 	Email       string
-	SharedFiles int
+	SharedFiles int   // files where both devs contributed at least one line
+	SharedLines int64 // Σ min(linesA, linesB) across shared files — mirrors DeveloperNetwork
 }
 
 type DevFileContrib struct {
@@ -866,24 +867,45 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			pace = math.Round(float64(cs.Commits)/float64(cs.ActiveDays)*10) / 10
 		}
 
-		// Collaborators: devs sharing files with this dev
-		collabMap := make(map[string]int)
+		// Collaborators: devs sharing files with this dev. SharedLines uses
+		// the min-per-file overlap (same semantics as DeveloperNetwork) so
+		// trivial one-line touches don't dominate the ranking.
+		type collabAcc struct {
+			files int
+			lines int64
+		}
+		collabMap := make(map[string]*collabAcc)
 		for _, fe := range ds.files {
-			if _, ok := fe.devLines[email]; !ok {
+			myLines, ok := fe.devLines[email]
+			if !ok {
 				continue
 			}
-			for otherEmail := range fe.devLines {
-				if otherEmail != email {
-					collabMap[otherEmail]++
+			for otherEmail, otherLines := range fe.devLines {
+				if otherEmail == email {
+					continue
 				}
+				acc, ok := collabMap[otherEmail]
+				if !ok {
+					acc = &collabAcc{}
+					collabMap[otherEmail] = acc
+				}
+				acc.files++
+				overlap := myLines
+				if otherLines < overlap {
+					overlap = otherLines
+				}
+				acc.lines += overlap
 			}
 		}
 		var collabs []DevCollaborator
-		for e, count := range collabMap {
-			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: count})
+		for e, acc := range collabMap {
+			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: acc.files, SharedLines: acc.lines})
 		}
-		// Deterministic: shared-files desc, then email asc.
+		// Deterministic: shared-lines desc, shared-files desc, email asc.
 		sort.Slice(collabs, func(i, j int) bool {
+			if collabs[i].SharedLines != collabs[j].SharedLines {
+				return collabs[i].SharedLines > collabs[j].SharedLines
+			}
 			if collabs[i].SharedFiles != collabs[j].SharedFiles {
 				return collabs[i].SharedFiles > collabs[j].SharedFiles
 			}

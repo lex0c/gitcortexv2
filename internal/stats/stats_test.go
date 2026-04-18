@@ -292,6 +292,126 @@ func TestAllSortsDeterministicUnderTies(t *testing.T) {
 	}
 }
 
+func TestDevProfilesCollaboratorsSharedLines(t *testing.T) {
+	// Alice co-edits 2 files with each of Bob and Carol. Alice has 500
+	// lines in each file. Bob's overlap is trivial (1 line per file);
+	// Carol wrote substantive lines (500 per file). SharedFiles ties at
+	// 2 for both collaborators — only SharedLines can distinguish.
+	// Expected overlap: Bob = min(500,1)*2 = 2; Carol = min(500,500)*2 = 1000.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"a.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 1, "carol@x": 500}},
+			"b.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 1, "carol@x": 500}},
+		},
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Name: "A", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+			"bob@x":   {Email: "bob@x", Name: "B", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+			"carol@x": {Email: "carol@x", Name: "C", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+		},
+	}
+	profiles := DevProfiles(ds, "alice@x")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	collabs := profiles[0].Collaborators
+	if len(collabs) != 2 {
+		t.Fatalf("collabs = %d, want 2", len(collabs))
+	}
+	// SharedFiles ties at 2; SharedLines distinguishes Carol (1000) from Bob (2).
+	if collabs[0].Email != "carol@x" || collabs[0].SharedLines != 1000 {
+		t.Errorf("top collaborator = {%s, lines=%d}, want {carol@x, 1000}",
+			collabs[0].Email, collabs[0].SharedLines)
+	}
+	if collabs[1].Email != "bob@x" || collabs[1].SharedLines != 2 {
+		t.Errorf("second collaborator = {%s, lines=%d}, want {bob@x, 2}",
+			collabs[1].Email, collabs[1].SharedLines)
+	}
+	// SharedFiles must still be populated for both.
+	for _, c := range collabs {
+		if c.SharedFiles != 2 {
+			t.Errorf("%s SharedFiles = %d, want 2", c.Email, c.SharedFiles)
+		}
+	}
+}
+
+func TestFileCouplingTertiaryTiebreaker(t *testing.T) {
+	// Two pairs with identical CoChanges AND identical CouplingPct must
+	// still order deterministically by file name.
+	ds := &Dataset{
+		couplingPairs: map[filePair]int{
+			{a: "m/x.go", b: "m/y.go"}: 5,
+			{a: "a/x.go", b: "a/y.go"}: 5,
+		},
+		couplingFileChanges: map[string]int{
+			"m/x.go": 10, "m/y.go": 10,
+			"a/x.go": 10, "a/y.go": 10,
+		},
+	}
+	// CouplingPct ties at 50% for both. CoChanges ties at 5.
+	first := FileCoupling(ds, 0, 1)
+	for i := 0; i < 20; i++ {
+		got := FileCoupling(ds, 0, 1)
+		if got[0].FileA != first[0].FileA {
+			t.Fatalf("iter %d non-deterministic: %q vs %q", i, got[0].FileA, first[0].FileA)
+		}
+	}
+	if first[0].FileA != "a/x.go" {
+		t.Errorf("top FileA = %q, want a/x.go (path asc)", first[0].FileA)
+	}
+}
+
+func TestDeveloperNetworkTertiaryTiebreaker(t *testing.T) {
+	// Two dev pairs with identical SharedLines AND SharedFiles must order
+	// by (DevA, DevB) asc.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"f1.go": {devLines: map[string]int64{"m@x": 10, "n@x": 10}},
+			"f2.go": {devLines: map[string]int64{"a@x": 10, "b@x": 10}},
+		},
+	}
+	// Both pairs: SharedFiles=1, SharedLines=10.
+	first := DeveloperNetwork(ds, 0, 1)
+	for i := 0; i < 20; i++ {
+		got := DeveloperNetwork(ds, 0, 1)
+		if got[0].DevA != first[0].DevA {
+			t.Fatalf("iter %d non-deterministic: %q vs %q", i, got[0].DevA, first[0].DevA)
+		}
+	}
+	if first[0].DevA != "a@x" || first[0].DevB != "b@x" {
+		t.Errorf("top pair = {%s,%s}, want {a@x,b@x} (pair asc)", first[0].DevA, first[0].DevB)
+	}
+}
+
+func TestChurnRiskTertiaryTiebreaker(t *testing.T) {
+	// Two files with identical RecentChurn AND BusFactor must order by path asc.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1,
+		Latest:   t1,
+		files: map[string]*fileEntry{
+			"z.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+			"a.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+			"m.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+		},
+	}
+	first := ChurnRisk(ds, 0)
+	for i := 0; i < 20; i++ {
+		got := ChurnRisk(ds, 0)
+		for j := range got {
+			if got[j].Path != first[j].Path {
+				t.Fatalf("iter %d [%d]: %q vs %q", i, j, got[j].Path, first[j].Path)
+			}
+		}
+	}
+	// All three tie on RecentChurn (100) and BusFactor (1). Expect a, m, z.
+	want := []string{"a.go", "m.go", "z.go"}
+	for i, p := range want {
+		if first[i].Path != p {
+			t.Errorf("[%d] = %q, want %q (tertiary path-asc tiebreak)", i, first[i].Path, p)
+		}
+	}
+}
+
 func TestDevProfilesInnerSortsDeterministic(t *testing.T) {
 	// Profile-internal slices (topFiles, scope, collaborators) are assembled
 	// via map iteration. Before the tiebreaker fix they could land in any

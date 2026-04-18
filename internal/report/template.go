@@ -301,7 +301,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span>{{printf "%.1f" .Pace}} commits/active day</span>
 
     <span style="color:#656d76;">Collaboration</span>
-    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}}){{end}}{{else}}solo contributor{{end}}</span>
+    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}} files, {{$c.SharedLines}} lines){{end}}{{else}}solo contributor{{end}}</span>
 
     <span style="color:#656d76;">Weekend</span>
     <span>{{printf "%.1f" .WeekendPct}}%</span>
