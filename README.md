@@ -159,13 +159,16 @@ Available stats:
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
 | `coupling` | Files that frequently change together, revealing hidden architectural dependencies |
-| `churn-risk` | Files ranked by recency-weighted churn combined with bus factor |
+| `churn-risk` | Files ranked by recent churn, classified into `cold` / `active` / `active-core` / `silo` / `legacy-hotspot` |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
 | `profile` | Per-developer report: scope, contribution type, pace, collaboration, top files |
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
+| `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
+
+See [`docs/METRICS.md`](docs/METRICS.md) for how each metric is calculated, including timezone handling (UTC for aggregation buckets, author-local for working patterns) and rename tracking (history merged across git-detected renames).
 
 ### Developer profile
 
@@ -211,18 +214,33 @@ IWorkspaceRepository.cs             WorkspaceRepository.cs               19     
 
 ### Churn risk
 
-Ranks files by a risk score combining recency-weighted churn with bus factor. Recent changes weigh more (exponential decay), and files with fewer owners score higher.
+Ranks files by recency-weighted churn and classifies each into an actionable label, so you can tell a healthy core module apart from a legacy bottleneck without eyeballing five columns.
 
 ```bash
 gitcortex stats --input data.jsonl --stat churn-risk --top 15
 gitcortex stats --input data.jsonl --stat churn-risk --churn-half-life 60   # faster decay
 ```
 
+Real output from the Pi-hole repository (one sample per label):
+
 ```
-PATH                           RISK    RECENT CHURN  BUS FACTOR  TOTAL CHANGES  LAST CHANGE
-src/Api/Controllers/Auth.cs    142.5   285.0         2           47             2024-03-28
-src/Domain/Entities/User.cs    98.3    98.3          1           12             2024-03-25
+PATH                                        LABEL           CHURN   BF  AGE    TREND
+automated install/basic-install.sh          active          115.3   15  4121d  0.00
+.github/workflows/codeql-analysis.yml       legacy-hotspot  66.2    2   1640d  0.26
+advanced/bash-completion/pihole-ftl.bash    silo            16.5    1   240d   1.00
+test/_alpine_3_23.Dockerfile                active-core     7.1     1   120d   1.00
+advanced/Templates/gravity.db.schema        cold            0.0     1   2616d  1.00
 ```
+
+| Label | Meaning |
+|-------|---------|
+| `cold` | Low recent churn — ignore. |
+| `active` | Shared ownership (bus factor ≥ 3). Healthy. |
+| `active-core` | New code (< 180d), single author. Usually fine. |
+| `silo` | Old + concentrated + stable/growing. Knowledge bottleneck — plan transfer. |
+| `legacy-hotspot` | **Urgent.** Old + concentrated + declining. Deprecated paths still being touched. |
+
+Sort key is `recent_churn`; the label answers "is this activity a problem?". The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
 
@@ -330,7 +348,7 @@ Run automated checks and fail the build when thresholds are exceeded.
 # Fail if any file has bus factor of 1
 gitcortex ci --input data.jsonl --fail-on-busfactor 1
 
-# Fail if any file has churn risk >= 500
+# Fail if any file has churn risk >= 500 (legacy composite: recent_churn / bus_factor)
 gitcortex ci --input data.jsonl --fail-on-churn-risk 500
 
 # Both rules, GitHub Actions format
@@ -343,6 +361,8 @@ gitcortex ci --input data.jsonl \
 Output formats: `text` (default), `github-actions` (annotations), `gitlab` (Code Quality JSON), `json`.
 
 Exit code 1 when violations are found, 0 when clean.
+
+> `--fail-on-churn-risk` evaluates the legacy `risk_score = recent_churn / bus_factor` field, not the new label classification surfaced by `stats --stat churn-risk`. The two can disagree — a file might have `risk_score` below the threshold yet still classify as `legacy-hotspot`. Use the stat command for triage; use the CI gate as a coarse threshold alarm.
 
 ## Architecture
 

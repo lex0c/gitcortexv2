@@ -30,10 +30,16 @@ type fileEntry struct {
 	devLines    map[string]int64
 	devCommits  map[string]int
 	recentChurn float64
+	firstChange time.Time
 	lastChange  time.Time
+	monthChurn  map[string]int64 // key: "YYYY-MM"; used for trend classification
 }
 
 type filePair struct{ a, b string }
+
+type renameEdge struct {
+	oldPath, newPath string
+}
 
 type Dataset struct {
 	// Summary
@@ -57,6 +63,9 @@ type Dataset struct {
 	// Coupling (pre-aggregated during load)
 	couplingPairs       map[filePair]int
 	couplingFileChanges map[string]int
+
+	// Rename edges captured during ingest; resolved in finalizeDataset.
+	renameEdges []renameEdge
 
 	// Internal accumulators
 	contribDays  map[string]map[string]struct{} // email → set of active dates
@@ -154,6 +163,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 	// Coupling streaming state
 	var coupCurrentSHA string
 	var coupCurrentFiles []string
+	var coupCurrentChurn int64
 
 	dayIndex := map[time.Weekday]int{
 		time.Monday: 0, time.Tuesday: 1, time.Wednesday: 2,
@@ -222,9 +232,12 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			cs.Additions += c.Additions
 			cs.Deletions += c.Deletions
 
-			// Contributor detail: active days, first/last date
+			// Contributor detail: active days, first/last date.
+			// Active days bucket in UTC so the count is stable across the
+			// distributed-team case where two commits near midnight local
+			// would otherwise land in different local dates.
 			if !t.IsZero() {
-				dayKey := t.Format("2006-01-02")
+				dayKey := t.UTC().Format("2006-01-02")
 				if ds.contribDays[c.AuthorEmail] == nil {
 					ds.contribDays[c.AuthorEmail] = make(map[string]struct{})
 				}
@@ -272,6 +285,18 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				}
 			}
 
+			// Capture rename edges (git log emits status "R" followed by
+			// similarity score, e.g. "R100"). Chains are resolved in
+			// finalizeDataset once all edges are known — required because
+			// the log is emitted newest-first, so pre-rename history comes
+			// later in the stream than the rename commit itself.
+			if strings.HasPrefix(cf.Status, "R") && cf.PathPrevious != "" && cf.PathCurrent != "" && cf.PathPrevious != cf.PathCurrent {
+				ds.renameEdges = append(ds.renameEdges, renameEdge{
+					oldPath: pathPrefix + cf.PathPrevious,
+					newPath: pathPrefix + cf.PathCurrent,
+				})
+			}
+
 			path := cf.PathCurrent
 			if path == "" {
 				path = cf.PathPrevious
@@ -286,7 +311,11 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			// File aggregation (hotspots + busfactor + churn-risk)
 			fe, ok := ds.files[path]
 			if !ok {
-				fe = &fileEntry{devLines: make(map[string]int64), devCommits: make(map[string]int)}
+				fe = &fileEntry{
+					devLines:   make(map[string]int64),
+					devCommits: make(map[string]int),
+					monthChurn: make(map[string]int64),
+				}
 				ds.files[path] = fe
 			}
 			fe.commits++
@@ -311,16 +340,22 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 					if cm.date.After(fe.lastChange) {
 						fe.lastChange = cm.date
 					}
+					if fe.firstChange.IsZero() || cm.date.Before(fe.firstChange) {
+						fe.firstChange = cm.date
+					}
+					fe.monthChurn[cm.date.UTC().Format("2006-01")] += cf.Additions + cf.Deletions
 				}
 			}
 
 			// Coupling: streaming pair computation
 			if cf.Commit != coupCurrentSHA {
-				flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+				flushCoupling(ds, coupCurrentFiles, coupCurrentChurn, opt.CoupMaxFiles)
 				coupCurrentSHA = cf.Commit
 				coupCurrentFiles = coupCurrentFiles[:0]
+				coupCurrentChurn = 0
 			}
 			coupCurrentFiles = append(coupCurrentFiles, path)
+			coupCurrentChurn += cf.Additions + cf.Deletions
 
 		case model.DevType:
 			// dev records are skipped — DevCount is derived from contributors (authors only)
@@ -331,7 +366,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 		return fmt.Errorf("read: %w", err)
 	}
 
-	flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+	flushCoupling(ds, coupCurrentFiles, coupCurrentChurn, opt.CoupMaxFiles)
 	ds.UniqueFileCount += len(uniqueFiles)
 
 	return nil
@@ -346,14 +381,18 @@ func finalizeDataset(ds *Dataset) {
 		}
 	}
 
+	applyRenames(ds)
+	// UniqueFileCount reflects post-merge canonical paths.
+	ds.UniqueFileCount = len(ds.files)
+
 	for email, cs := range ds.contributors {
 		cs.ActiveDays = len(ds.contribDays[email])
 		cs.FilesTouched = len(ds.contribFiles[email])
 		if t, ok := ds.contribFirst[email]; ok {
-			cs.FirstDate = t.Format("2006-01-02")
+			cs.FirstDate = t.UTC().Format("2006-01-02")
 		}
 		if t, ok := ds.contribLast[email]; ok {
-			cs.LastDate = t.Format("2006-01-02")
+			cs.LastDate = t.UTC().Format("2006-01-02")
 		}
 	}
 	ds.contribDays = nil
@@ -362,7 +401,148 @@ func finalizeDataset(ds *Dataset) {
 	ds.contribLast = nil
 }
 
-func flushCoupling(ds *Dataset, files []string, maxFiles int) {
+// applyRenames resolves rename edges captured during ingest and re-keys
+// ds.files / coupling maps to their canonical (latest) path. Safe to call
+// with no edges. Defensive against cycles (A→B→A) — rare but possible if
+// a repo reverted a rename.
+func applyRenames(ds *Dataset) {
+	if len(ds.renameEdges) == 0 {
+		return
+	}
+
+	// Path reuse detection. When the same oldPath appears in multiple
+	// rename events (e.g. a file was renamed away, then the name was
+	// reused for an unrelated file, which was then renamed again), we
+	// cannot tell which pre-rename commits belonged to which lineage
+	// without per-commit temporal tracking — ds.files[oldPath] has the
+	// two lineages already merged at ingest time. Migrating either edge
+	// would spread one lineage into a target that belongs to the other.
+	// Skip migration for such paths: underattribution (both targets miss
+	// their pre-rename history) is safer than misattribution (the wrong
+	// target inherits the other lineage's data).
+	oldPathCounts := make(map[string]int)
+	for _, e := range ds.renameEdges {
+		oldPathCounts[e.oldPath]++
+	}
+
+	direct := make(map[string]string, len(ds.renameEdges))
+	for _, e := range ds.renameEdges {
+		if oldPathCounts[e.oldPath] > 1 {
+			continue // path reused — refuse to migrate
+		}
+		direct[e.oldPath] = e.newPath
+	}
+
+	canonical := func(p string) string {
+		seen := map[string]struct{}{}
+		for {
+			if _, ok := seen[p]; ok {
+				return p // cycle detected — bail with current
+			}
+			seen[p] = struct{}{}
+			next, ok := direct[p]
+			if !ok || next == p {
+				return p
+			}
+			p = next
+		}
+	}
+
+	// Re-key file entries, merging colliders.
+	newFiles := make(map[string]*fileEntry, len(ds.files))
+	for path, fe := range ds.files {
+		c := canonical(path)
+		if existing, ok := newFiles[c]; ok {
+			mergeFileEntry(existing, fe)
+		} else {
+			newFiles[c] = fe
+		}
+	}
+	ds.files = newFiles
+
+	// Re-key coupling denominator.
+	newChanges := make(map[string]int, len(ds.couplingFileChanges))
+	for path, count := range ds.couplingFileChanges {
+		newChanges[canonical(path)] += count
+	}
+	ds.couplingFileChanges = newChanges
+
+	// Re-key coupling pairs. Drop pairs that collapse onto themselves
+	// (both sides resolved to the same canonical path = rename chain).
+	newPairs := make(map[filePair]int, len(ds.couplingPairs))
+	for pair, count := range ds.couplingPairs {
+		ca, cb := canonical(pair.a), canonical(pair.b)
+		if ca == cb {
+			continue
+		}
+		if ca > cb {
+			ca, cb = cb, ca
+		}
+		newPairs[filePair{a: ca, b: cb}] += count
+	}
+	ds.couplingPairs = newPairs
+
+	// Re-key contributor file sets so FilesTouched reflects canonical paths.
+	// Without this, a dev who edited old.go and new.go across a rename would
+	// be counted as touching two files instead of one.
+	for email, paths := range ds.contribFiles {
+		newSet := make(map[string]struct{}, len(paths))
+		for p := range paths {
+			newSet[canonical(p)] = struct{}{}
+		}
+		ds.contribFiles[email] = newSet
+	}
+}
+
+// mergeFileEntry folds src into dst: sums scalars, unions maps, keeps the
+// widest firstChange→lastChange span.
+func mergeFileEntry(dst, src *fileEntry) {
+	dst.commits += src.commits
+	dst.additions += src.additions
+	dst.deletions += src.deletions
+	dst.recentChurn += src.recentChurn
+
+	if dst.devLines == nil {
+		dst.devLines = make(map[string]int64)
+	}
+	for k, v := range src.devLines {
+		dst.devLines[k] += v
+	}
+	if dst.devCommits == nil {
+		dst.devCommits = make(map[string]int)
+	}
+	for k, v := range src.devCommits {
+		dst.devCommits[k] += v
+	}
+	if dst.monthChurn == nil {
+		dst.monthChurn = make(map[string]int64)
+	}
+	for k, v := range src.monthChurn {
+		dst.monthChurn[k] += v
+	}
+
+	if !src.firstChange.IsZero() {
+		if dst.firstChange.IsZero() || src.firstChange.Before(dst.firstChange) {
+			dst.firstChange = src.firstChange
+		}
+	}
+	if src.lastChange.After(dst.lastChange) {
+		dst.lastChange = src.lastChange
+	}
+}
+
+// isMechanicalRefactor returns true when a commit's shape matches a likely
+// rename / format / lint pass: many files with very low mean churn per file.
+// Such commits generate spurious coupling pairs and are filtered in
+// flushCoupling. Thresholds are package constants (refactor*).
+func isMechanicalRefactor(fileCount int, commitChurn int64) bool {
+	if fileCount < refactorMinFiles {
+		return false
+	}
+	return float64(commitChurn)/float64(fileCount) < refactorMaxChurnPerFile
+}
+
+func flushCoupling(ds *Dataset, files []string, commitChurn int64, maxFiles int) {
 	// Always count file changes (denominator for coupling %)
 	// so single-file commits are included in the base rate.
 	seen := make(map[string]bool, len(files))
@@ -377,6 +557,13 @@ func flushCoupling(ds *Dataset, files []string, maxFiles int) {
 
 	// Only count pairs for multi-file commits within size limit
 	if len(unique) < 2 || len(unique) > maxFiles {
+		return
+	}
+
+	// Global renames, format/lint passes, and similar mechanical commits
+	// would otherwise generate spurious coupling pairs. Denominator above
+	// is still incremented so ChangesA/ChangesB stay honest.
+	if isMechanicalRefactor(len(unique), commitChurn) {
 		return
 	}
 
