@@ -410,16 +410,27 @@ func applyRenames(ds *Dataset) {
 		return
 	}
 
+	// Path reuse detection. When the same oldPath appears in multiple
+	// rename events (e.g. a file was renamed away, then the name was
+	// reused for an unrelated file, which was then renamed again), we
+	// cannot tell which pre-rename commits belonged to which lineage
+	// without per-commit temporal tracking — ds.files[oldPath] has the
+	// two lineages already merged at ingest time. Migrating either edge
+	// would spread one lineage into a target that belongs to the other.
+	// Skip migration for such paths: underattribution (both targets miss
+	// their pre-rename history) is safer than misattribution (the wrong
+	// target inherits the other lineage's data).
+	oldPathCounts := make(map[string]int)
+	for _, e := range ds.renameEdges {
+		oldPathCounts[e.oldPath]++
+	}
+
 	direct := make(map[string]string, len(ds.renameEdges))
 	for _, e := range ds.renameEdges {
-		// JSONL is newest-first. If the same old path has multiple rename
-		// events (rare — happens when a file is recreated after rename and
-		// renamed again), keep the *first* edge we see, which corresponds
-		// to the chronologically newest rename. Later iterations are older
-		// and should not overwrite.
-		if _, ok := direct[e.oldPath]; !ok {
-			direct[e.oldPath] = e.newPath
+		if oldPathCounts[e.oldPath] > 1 {
+			continue // path reused — refuse to migrate
 		}
+		direct[e.oldPath] = e.newPath
 	}
 
 	canonical := func(p string) string {

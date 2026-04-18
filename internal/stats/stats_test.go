@@ -1429,29 +1429,74 @@ func TestRenameDevFilesTouchedUsesCanonical(t *testing.T) {
 	}
 }
 
-func TestRenameDedupPrefersChronologicallyNewest(t *testing.T) {
-	// Simulate the recreate-then-rename-again scenario. JSONL order is
-	// newest-first, so the newer edge ({A, D}) appears before the older
-	// edge ({A, B}). canonical(A) must resolve to D, not B.
+func TestRenameSkipsReusedOldPath(t *testing.T) {
+	// Path-reuse scenario: A was renamed to B in old history, then the
+	// name "A" was reused for an unrelated file, which was renamed to D.
+	// JSONL is newest-first, so renameEdges hold {A→D} first and {A→B}
+	// second. Both have oldPath="A" — this is the signal that lineages
+	// cannot be disambiguated safely.
+	//
+	// Before the fix, the first edge won the dedup and applyRenames
+	// migrated the merged ds.files["A"] (containing both lineages'
+	// pre-rename data) into "D", polluting D with lineage-1 commits
+	// that belong to B and stripping B of its pre-rename history.
+	//
+	// After the fix, applyRenames detects the duplicate oldPath and
+	// refuses to migrate either edge. A stays where it is (still with
+	// merged lineages, but no cross-contamination into B or D), and
+	// B and D each keep only their own post-rename data. This is
+	// underattribution, which is safer than active misattribution.
 	ds := newDataset()
 	ds.renameEdges = []renameEdge{
-		{oldPath: "A", newPath: "D"}, // newer rename (seen first)
-		{oldPath: "A", newPath: "B"}, // older rename (should be ignored)
+		{oldPath: "A", newPath: "D"},
+		{oldPath: "A", newPath: "B"},
 	}
 	ds.files = map[string]*fileEntry{
-		"A": {commits: 1, monthChurn: map[string]int64{}},
+		"A": {commits: 2, monthChurn: map[string]int64{}},
 		"B": {commits: 1, monthChurn: map[string]int64{}},
 		"D": {commits: 1, monthChurn: map[string]int64{}},
 	}
 	applyRenames(ds)
-	if _, ok := ds.files["B"]; !ok {
-		t.Error("B should survive (it was never renamed away in the newer edge)")
+
+	a, ok := ds.files["A"]
+	if !ok {
+		t.Fatal("A should remain — path reuse must disable migration")
 	}
-	if _, ok := ds.files["D"]; !ok {
-		t.Fatal("D missing — A should have merged into D")
+	if a.commits != 2 {
+		t.Errorf("A commits = %d, want 2 (unchanged)", a.commits)
 	}
-	if ds.files["D"].commits != 2 {
-		t.Errorf("D.commits = %d, want 2 (A merged into D)", ds.files["D"].commits)
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B commits = %d, want 1 (A must not have been merged in)", ds.files["B"].commits)
+	}
+	if ds.files["D"].commits != 1 {
+		t.Errorf("D commits = %d, want 1 (A must not have been merged in)", ds.files["D"].commits)
+	}
+}
+
+func TestRenameChainNotMistakenForReuse(t *testing.T) {
+	// Guard against the fix being too aggressive: a genuine chain
+	// A→B→C has DIFFERENT oldPaths (A once, B once) and must still
+	// be collapsed into C as before.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "B", newPath: "C"},
+		{oldPath: "A", newPath: "B"},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 1, monthChurn: map[string]int64{}},
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"C": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been merged — not a reuse case")
+	}
+	if _, ok := ds.files["B"]; ok {
+		t.Error("B should have been merged — not a reuse case")
+	}
+	if ds.files["C"].commits != 3 {
+		t.Errorf("C.commits = %d, want 3 (A+B+C chain)", ds.files["C"].commits)
 	}
 }
 

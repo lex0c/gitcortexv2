@@ -329,6 +329,7 @@ Limits:
 - Git's rename detection defaults to ~50% similarity. A rename with heavy edits may not be detected, resulting in separate delete + add entries.
 - Copies (`C*` status) are **not** merged — copied files legitimately live as two entries.
 - If the rename commit falls outside a `--since` filter, the edge isn't captured and the old/new paths stay separate within the filtered window.
+- **Path reuse:** when the same path appears as the source of **multiple** rename events (e.g. `A` renamed to `B` in old history, then the name `A` was reused for an unrelated file that was later renamed to `D`), the two lineages are already conflated in `ds.files["A"]` at ingest time, and we cannot disambiguate them without per-commit temporal tracking. Rather than misattributing one lineage to the other target, gitcortex **refuses to migrate** any edge whose oldPath appears more than once. Concretely: `ds.files["A"]` stays put (with both lineages merged, same as without the rename tracker), `B` keeps only its post-rename history, and `D` keeps only its post-rename history. This is underattribution, not misattribution — neither target receives data that belongs to the other lineage.
 
 ### `--since` filter + ChurnRisk age
 
